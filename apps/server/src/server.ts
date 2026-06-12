@@ -108,26 +108,7 @@ export async function createServer(config: AppConfig) {
       response: {
         200: {
           type: "object",
-          properties: {
-            ok: { type: "boolean" },
-            action: { type: "string" },
-            data: {
-              type: "object",
-              properties: {
-                status: { type: "string" },
-                mediaTools: {
-                  type: "object",
-                  properties: {
-                    ffmpeg: { type: "boolean" },
-                    espeak: { type: "boolean" },
-                    errors: { type: "array", items: { type: "string" } },
-                  },
-                },
-                authRequired: { type: "boolean" },
-                maxSessions: { type: "integer" },
-              },
-            },
-          },
+          additionalProperties: true,
         },
       },
     },
@@ -155,17 +136,7 @@ export async function createServer(config: AppConfig) {
       response: {
         200: {
           type: "object",
-          properties: {
-            ok: { type: "boolean" },
-            action: { type: "string" },
-            data: {
-              type: "object",
-              properties: {
-                session: { type: "object" }, // full BrowserSessionStatus shape
-                urls: { type: "object" },
-              },
-            },
-          },
+          additionalProperties: true,
         },
       },
     },
@@ -185,11 +156,7 @@ export async function createServer(config: AppConfig) {
       response: {
         200: {
           type: "object",
-          properties: {
-            ok: { type: "boolean" },
-            action: { type: "string" },
-            data: { type: "array", items: { type: "object" } },
-          },
+          additionalProperties: true,
         },
       },
     },
@@ -225,7 +192,7 @@ export async function createServer(config: AppConfig) {
         },
       },
       response: {
-        200: { type: "object", properties: { ok: { type: "boolean" }, action: { type: "string" }, data: { type: "object" } } },
+        200: { type: "object", additionalProperties: true },
       },
     },
   }, async (request) => {
@@ -345,7 +312,7 @@ export async function createServer(config: AppConfig) {
       description: "Uploaded files can be used as synthetic camera or microphone sources.",
       consumes: ["multipart/form-data"],
       response: {
-        200: { type: "object", properties: { ok: { type: "boolean" }, action: { type: "string" }, data: { type: "object" } } },
+        200: { type: "object", additionalProperties: true },
       },
     },
   }, async (request) => {
@@ -379,7 +346,7 @@ export async function createServer(config: AppConfig) {
         },
       },
       response: {
-        200: { type: "object", properties: { ok: { type: "boolean" }, action: { type: "string" }, data: { type: "object" } } },
+        200: { type: "object", additionalProperties: true },
       },
     },
   }, async (request) => {
