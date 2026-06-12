@@ -33,11 +33,20 @@ COPY packages/media/package.json packages/media/package.json
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 
-RUN npm install
+# Install *all* dependencies (prod + dev) so that `npm run build` (which uses tsc, vite, etc.
+# from devDependencies in the root and workspaces) succeeds inside the image.
+# We use `npm ci` (reproducible from lockfile) + --include=dev to override the NODE_ENV=production
+# effect that would otherwise omit devDependencies.
+RUN npm ci --include=dev
+
 RUN npx playwright install --with-deps chromium
 
 COPY . .
 RUN npm run build
+
+# Prune devDependencies after the build to keep the final image smaller and leaner for production.
+# Only runtime "dependencies" (and the built workspace packages) remain in node_modules.
+RUN npm prune --production
 
 EXPOSE 3000
 
