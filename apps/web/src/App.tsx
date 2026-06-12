@@ -17,9 +17,6 @@ export default function App() {
   if (path.startsWith("/session/")) {
     return <SessionPage id={decodeURIComponent(path.split("/")[2] ?? "")} />;
   }
-  if (path === "/api-docs") {
-    return <ApiDocsPage />;
-  }
   return <HomePage />;
 }
 
@@ -31,8 +28,11 @@ function Shell({ children }: { children: ReactNode }) {
           LLM Telepresence Browser Lab
         </a>
         <nav aria-label="Main navigation">
-          <a id="nav-api-docs" href="/api-docs">
-            API Docs
+          <a id="nav-swagger" href="/swagger">
+            Swagger UI
+          </a>
+          <a id="nav-openapi" href="/openapi.json">
+            OpenAPI Spec
           </a>
           <a id="nav-lite" href="/lite">
             Lite
@@ -197,8 +197,11 @@ function HomePage() {
           <button id="dump-page-state-button" type="button" onClick={() => void quickAction("state")} disabled={!sessionId}>
             Dump Page State
           </button>
-          <a id="show-api-docs-button" className="button-link" href="/api-docs">
-            Show API Docs
+          <a id="show-swagger-button" className="button-link" href="/swagger" target="_blank" rel="noopener">
+            Swagger UI
+          </a>
+          <a id="show-openapi-button" className="button-link" href="/openapi.json" target="_blank" rel="noopener">
+            OpenAPI Spec (JSON)
           </a>
         </Panel>
       </section>
@@ -613,58 +616,6 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
       <h2 id={`${slug(title)}-title`}>{title}</h2>
       {children}
     </section>
-  );
-}
-
-function ApiDocsPage() {
-  return (
-    <Shell>
-      <section className="docs">
-        <h1>API Docs</h1>
-        <p>
-          All endpoints return JSON shaped like <code>{"{ ok, action, data, error }"}</code>. This is a public API; no authentication token is required.
-        </p>
-
-        <h2>Create Session</h2>
-        <pre>{`curl -s -X POST http://localhost:3000/api/sessions \\
-  -H "content-type: application/json" \\
-  -d '{}'`}</pre>
-
-        <h2>Navigate</h2>
-        <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/navigate \\
-  -H "content-type: application/json" \\
-  -d '{"url":"https://example.com"}'`}</pre>
-
-        <h2>Upload Asset</h2>
-        <pre>{`curl -s -X POST http://localhost:3000/api/assets \\
-  -F "file=@avatar.png"`}</pre>
-
-        <h2>Set Camera Source</h2>
-        <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/media/camera \\
-  -H "content-type: application/json" \\
-  -d '{"mode":"image","assetId":"ASSET","disclosure":{"enabled":true,"label":"AI-assisted"}}'`}</pre>
-
-        <h2>Set Mic Source</h2>
-        <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/media/mic \\
-  -H "content-type: application/json" \\
-  -d '{"mode":"tts","text":"Hello, I am testing audio.","voice":"default"}'`}</pre>
-
-        <h2>LLM Usage Loop</h2>
-        <ol>
-          <li>Create a session with <code>POST /api/sessions</code>.</li>
-          <li>Upload approved avatar/audio assets with <code>POST /api/assets</code>.</li>
-          <li>Set camera or mic sources before visiting WebRTC test pages.</li>
-          <li>Navigate with <code>/navigate</code>, inspect <code>/state</code>, then use <code>/click</code>, <code>/type</code>, and <code>/key</code>.</li>
-          <li>Close the session with <code>DELETE /api/sessions/:id</code>.</li>
-        </ol>
-
-        <h2>Safety Notes</h2>
-        <p>
-          This lab is for explicit-consent scenarios only. It does not implement stealth, CAPTCHA bypass, credential theft,
-          or platform abuse features. Keep synthetic media disclosure enabled when participants should know media is generated.
-        </p>
-      </section>
-    </Shell>
   );
 }
 
