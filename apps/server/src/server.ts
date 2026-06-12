@@ -15,6 +15,25 @@ import { AssetStore } from "./assetStore.js";
 import { HttpError } from "./errors.js";
 import { mapExternalToolError, SessionManager } from "./sessionManager.js";
 
+function toFastifySchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(toFastifySchema);
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  return Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => {
+      if (key === "$ref" && typeof value === "string") {
+        const match = value.match(/^#\/components\/schemas\/(.+)$/);
+        return [key, match ? `${match[1]}#` : value];
+      }
+      return [key, toFastifySchema(value)];
+    })
+  );
+}
+
 export async function createServer(config: AppConfig) {
   await mkdir(config.dataDir, { recursive: true });
   const assets = new AssetStore(config.dataDir);
@@ -26,7 +45,12 @@ export async function createServer(config: AppConfig) {
     logger: {
       level: process.env.LOG_LEVEL || "info"
     },
-    bodyLimit: Math.max(config.uploadMaxBytes, 1024 * 1024)
+    bodyLimit: Math.max(config.uploadMaxBytes, 1024 * 1024),
+    ajv: {
+      customOptions: {
+        strict: false
+      }
+    }
   });
 
   await app.register(cors, { origin: true, credentials: true });
@@ -38,6 +62,246 @@ export async function createServer(config: AppConfig) {
     }
   });
 
+  const openApiSchemas: Record<string, any> = {
+    // Reusable error shape (used by all error responses)
+    ErrorResponse: {
+      type: "object",
+      properties: {
+        ok: { type: "boolean", example: false },
+        error: {
+          type: "object",
+          properties: {
+            code: { type: "string", example: "SESSION_NOT_FOUND" },
+            message: { type: "string", example: "No active session with id undefined" },
+            details: { type: "object", nullable: true, additionalProperties: true },
+          },
+          required: ["code", "message"],
+        },
+      },
+      required: ["ok", "error"],
+    },
+
+    // Specific response data shapes for every endpoint
+    HealthData: {
+      type: "object",
+      properties: {
+        status: { type: "string", example: "ok" },
+        mediaTools: {
+          type: "object",
+          properties: {
+            ffmpeg: { type: "boolean", example: true },
+            espeak: { type: "boolean", example: false },
+            errors: { type: "array", items: { type: "string" }, example: ["None of these commands are available: espeak-ng, espeak"] },
+          },
+          required: ["ffmpeg", "espeak", "errors"],
+        },
+        authRequired: { type: "boolean", example: false },
+        maxSessions: { type: "integer", example: 4 },
+      },
+      required: ["status", "mediaTools", "authRequired", "maxSessions"],
+    },
+
+    SessionListData: {
+      type: "array",
+      items: { $ref: "#/components/schemas/BrowserSessionStatus" },
+    },
+
+    ScreenshotData: {
+      type: "object",
+      properties: {
+        dataUrl: { type: "string", description: "data:image/png;base64,..." },
+      },
+      required: ["dataUrl"],
+    },
+
+    StateData: { $ref: "#/components/schemas/PageState" },
+
+    MediaUpdateData: { $ref: "#/components/schemas/BrowserSessionStatus" },
+
+    AssetData: { $ref: "#/components/schemas/AssetMetadata" },
+
+    TTSData: { $ref: "#/components/schemas/AssetMetadata" },
+
+    CreateSessionData: { $ref: "#/components/schemas/CreateSessionResponse" },
+
+    OkResponse: {
+      type: "object",
+      properties: {
+        ok: { type: "boolean" },
+        action: { type: "string" },
+        data: { type: "object", additionalProperties: true },
+      },
+      required: ["ok"],
+    },
+
+    AssetListResponse: {
+      type: "array",
+      items: { $ref: "#/components/schemas/AssetMetadata" },
+    },
+
+    // Domain models with every field specified
+    DisclosureConfig: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean" },
+        label: { type: "string" },
+      },
+      required: ["enabled"],
+    },
+
+    CameraSourceConfig: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["off", "test-pattern", "image", "video", "generated"] },
+        assetId: { type: "string", nullable: true },
+        loop: { type: "boolean", nullable: true },
+        active: { type: "boolean" },
+        fileName: { type: "string", nullable: true },
+        disclosure: { $ref: "#/components/schemas/DisclosureConfig", nullable: true },
+        implementation: { type: "string", nullable: true },
+        notes: { type: "array", items: { type: "string" }, nullable: true },
+      },
+      required: ["mode", "active"],
+    },
+
+    MicSourceConfig: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["off", "silence", "audio-file", "tts", "stream"] },
+        assetId: { type: "string", nullable: true },
+        loop: { type: "boolean", nullable: true },
+        active: { type: "boolean" },
+        fileName: { type: "string", nullable: true },
+        voice: { type: "string", nullable: true },
+        implementation: { type: "string", nullable: true },
+        notes: { type: "array", items: { type: "string" }, nullable: true },
+      },
+      required: ["mode", "active"],
+    },
+
+    MediaStatus: {
+      type: "object",
+      properties: {
+        camera: { $ref: "#/components/schemas/CameraSourceConfig" },
+        mic: { $ref: "#/components/schemas/MicSourceConfig" },
+      },
+      required: ["camera", "mic"],
+    },
+
+    ConsoleLogEntry: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        timestamp: { type: "string", format: "date-time" },
+        type: { type: "string" },
+        text: { type: "string" },
+        location: { type: "string", nullable: true },
+      },
+      required: ["id", "timestamp", "type", "text"],
+    },
+
+    PageErrorEntry: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        timestamp: { type: "string", format: "date-time" },
+        message: { type: "string" },
+        stack: { type: "string", nullable: true },
+      },
+      required: ["id", "timestamp", "message"],
+    },
+
+    BrowserSessionStatus: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+        expiresAt: { type: "string", format: "date-time" },
+        active: { type: "boolean" },
+        currentUrl: { type: "string" },
+        title: { type: "string" },
+        media: { $ref: "#/components/schemas/MediaStatus" },
+        latestScreenshotDataUrl: { type: "string", nullable: true },
+        consoleLogs: { type: "array", items: { $ref: "#/components/schemas/ConsoleLogEntry" } },
+        recentErrors: { type: "array", items: { $ref: "#/components/schemas/PageErrorEntry" } },
+      },
+      required: ["id", "createdAt", "updatedAt", "expiresAt", "active", "currentUrl", "title", "media", "consoleLogs", "recentErrors"],
+    },
+
+    AssetMetadata: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        kind: { type: "string", enum: ["image", "video", "audio", "other"] },
+        originalName: { type: "string" },
+        safeName: { type: "string" },
+        mimeType: { type: "string" },
+        bytes: { type: "integer" },
+        createdAt: { type: "string", format: "date-time" },
+        url: { type: "string", nullable: true },
+        derivedFromAssetId: { type: "string", nullable: true },
+      },
+      required: ["id", "kind", "originalName", "safeName", "mimeType", "bytes", "createdAt"],
+    },
+
+    ElementSummary: {
+      type: "object",
+      properties: {
+        tag: { type: "string" },
+        role: { type: "string", nullable: true },
+        selector: { type: "string" },
+        text: { type: "string", nullable: true },
+        href: { type: "string", nullable: true },
+        placeholder: { type: "string", nullable: true },
+        name: { type: "string", nullable: true },
+        type: { type: "string", nullable: true },
+        value: { type: "string", nullable: true },
+      },
+      required: ["tag", "selector"],
+    },
+
+    PageState: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        currentUrl: { type: "string" },
+        title: { type: "string" },
+        visibleText: { type: "string" },
+        elements: { type: "array", items: { $ref: "#/components/schemas/ElementSummary" } },
+        focusedElement: { $ref: "#/components/schemas/ElementSummary", nullable: true },
+        consoleLogs: { type: "array", items: { $ref: "#/components/schemas/ConsoleLogEntry" } },
+        recentErrors: { type: "array", items: { $ref: "#/components/schemas/PageErrorEntry" } },
+        media: { $ref: "#/components/schemas/MediaStatus" },
+        timestamp: { type: "string", format: "date-time" },
+      },
+      required: ["sessionId", "currentUrl", "title", "visibleText", "elements", "consoleLogs", "recentErrors", "media", "timestamp"],
+    },
+
+    CreateSessionResponse: {
+      type: "object",
+      properties: {
+        session: { $ref: "#/components/schemas/BrowserSessionStatus" },
+        urls: {
+          type: "object",
+          properties: {
+            web: { type: "string" },
+            lite: { type: "string" },
+            api: { type: "string" },
+            screenshot: { type: "string" },
+            state: { type: "string" },
+          },
+          required: ["web", "lite", "api", "screenshot", "state"],
+        },
+      },
+      required: ["session", "urls"],
+    },
+  };
+
+  for (const [name, schema] of Object.entries(openApiSchemas)) {
+    app.addSchema({ $id: name, ...(toFastifySchema(schema) as Record<string, unknown>) });
+  }
+
   // OpenAPI / Swagger support - spec is generated at runtime from route definitions.
   // This ensures /openapi.json and the Swagger UI are always up-to-date on any deploy
   // (local npm start, Docker, Cloud Run, Cloud Build, etc.).
@@ -48,10 +312,28 @@ export async function createServer(config: AppConfig) {
         description:
           "Permissioned remote browser lab with synthetic camera and microphone inputs. " +
           "Designed for LLM agents, browser automation tools, testing, demos, and accessibility experiments. " +
-          "Public API - no authentication required.",
+          "Public API - no authentication required (no tokens, no Authorization header needed). " +
+          "All responses follow the shape { ok: boolean, action?: string, data?: any, error?: { code: string, message: string, details?: any } }. " +
+          "Synthetic media sources are for consented/authorized use only; disclosure watermarks are enabled by default.",
         version: "0.1.0",
+        contact: {
+          name: "LLM Telepresence Lab",
+        },
       },
-      servers: [{ url: config.baseUrl }],
+      servers: [{ url: config.baseUrl, description: "Current deployment" }],
+      security: [], // Public API - no auth required
+      components: {
+        securitySchemes: {
+          // Left for documentation; the API is public with no auth enforced.
+          None: {
+            type: "apiKey",
+            in: "header",
+            name: "Authorization",
+            description: "No authentication is required. The API is fully public.",
+          },
+        },
+        schemas: openApiSchemas,
+      },
     },
   });
 
@@ -103,13 +385,36 @@ export async function createServer(config: AppConfig) {
   app.get("/api/health", {
     schema: {
       tags: ["Meta"],
-      summary: "Health check",
-      description: "Returns server status and availability of external media tools (ffmpeg, espeak-ng).",
+      summary: "Health & capabilities check",
+      description: "Returns whether the server is healthy and which media generation tools are available on the host (ffmpeg for image/video processing, espeak-ng/espeak for TTS). Useful as a first call for LLM agents.",
       response: {
         200: {
-          type: "object",
-          additionalProperties: true,
+          description: "Successful health response",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "HealthData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: {
+                ok: true,
+                action: "state",
+                data: {
+                  status: "ok",
+                  mediaTools: { ffmpeg: true, espeak: false, errors: ["None of these commands are available: espeak-ng, espeak"] },
+                  authRequired: false,
+                  maxSessions: 4,
+                },
+              },
+            },
+          },
         },
+        500: { $ref: "ErrorResponse#" },
       },
     },
   }, async () => {
@@ -125,18 +430,45 @@ export async function createServer(config: AppConfig) {
     schema: {
       tags: ["Sessions"],
       summary: "Create a new browser session",
-      description: "Launches an isolated Chromium instance. Optionally navigates to an initial URL.",
+      description: "Launches a fresh isolated Playwright Chromium browser (headless by default). The session gets its own profile and is subject to the server's URL allow/block policies and private-network protections. Returns the full initial BrowserSessionStatus plus convenient URLs. The request body is optional (may be an empty object {}); providing initialUrl is recommended for immediate navigation.",
       body: {
         type: "object",
         properties: {
-          initialUrl: { type: "string", format: "uri" },
+          initialUrl: { type: "string", format: "uri", description: "Optional URL to navigate to immediately after launch" },
         },
         additionalProperties: false,
+        example: { initialUrl: "https://example.com" },
       },
       response: {
         200: {
-          type: "object",
-          additionalProperties: true,
+          description: "Session created successfully",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "CreateSessionResponse#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: {
+                ok: true,
+                action: "created",
+                data: {
+                  session: { id: "0615f8c9-2502-4e10-8f4d-adc1002b05b8", createdAt: "2026-06-12T08:12:07.390Z", active: true, currentUrl: "about:blank", title: "", media: { camera: { mode: "off", active: false }, mic: { mode: "off", active: false } }, consoleLogs: [], recentErrors: [] },
+                  urls: {
+                    web: "http://localhost:3000/session/0615f8c9-2502-4e10-8f4d-adc1002b05b8",
+                    lite: "http://localhost:3000/lite?session=0615f8c9-2502-4e10-8f4d-adc1002b05b8",
+                    api: "http://localhost:3000/api/sessions/0615f8c9-2502-4e10-8f4d-adc1002b05b8",
+                    screenshot: "http://localhost:3000/api/sessions/0615f8c9-2502-4e10-8f4d-adc1002b05b8/screenshot",
+                    state: "http://localhost:3000/api/sessions/0615f8c9-2502-4e10-8f4d-adc1002b05b8/state",
+                  },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -152,11 +484,29 @@ export async function createServer(config: AppConfig) {
   app.get("/api/sessions", {
     schema: {
       tags: ["Sessions"],
-      summary: "List active sessions",
+      summary: "List all active browser sessions",
+      description: "Returns an array of current BrowserSessionStatus objects. Sessions are automatically cleaned up after their TTL expires.",
       response: {
         200: {
-          type: "object",
-          additionalProperties: true,
+          description: "List of sessions",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "SessionListData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: {
+                ok: true,
+                action: "state",
+                data: [{ id: "0615f8c9-...", active: true, currentUrl: "about:blank", title: "", media: { camera: { mode: "off", active: false }, mic: { mode: "off", active: false } }, consoleLogs: [], recentErrors: [] }],
+              },
+            },
+          },
         },
       },
     },
@@ -164,12 +514,73 @@ export async function createServer(config: AppConfig) {
     return okResult("state", sessions.listSessions());
   });
 
-  app.get("/api/sessions/:id", async (request) => {
+  app.get("/api/sessions/:id", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Get full status of a session",
+      description: "Returns the complete current BrowserSessionStatus. This is the main way for agents to 'see' what is on the page right now (visible elements, text, logs, errors, media state).",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      response: {
+        200: {
+          description: "Session status",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "state", data: { id: "0615f8c9-...", active: true, currentUrl: "https://example.com", title: "Example", media: { camera: { mode: "off", active: false }, mic: { mode: "off", active: false } }, consoleLogs: [], recentErrors: [] } },
+            },
+          },
+        },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("state", sessions.getStatus(id));
   });
 
-  app.delete("/api/sessions/:id", async (request) => {
+  app.delete("/api/sessions/:id", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Terminate and delete a browser session",
+      description: "Closes the Chromium browser for this session and cleans up all associated state and derived media files. The session becomes unavailable immediately.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "closed", data: { id: "0615f8c9-2502-4e10-8f4d-adc1002b05b8" } },
+            },
+          },
+        },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     await sessions.deleteSession(id);
     return okResult("closed", { id });
@@ -190,9 +601,28 @@ export async function createServer(config: AppConfig) {
         properties: {
           url: { type: "string", format: "uri" },
         },
+        example: { "url": "https://example.com" },
       },
       response: {
-        200: { type: "object", additionalProperties: true },
+        200: {
+          description: "Navigation result (updated session status)",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "navigated", data: { id: "0615f8c9-...", currentUrl: "https://example.com", active: true, media: { camera: { mode: "off", active: false }, mic: { mode: "off", active: false } }, consoleLogs: [], recentErrors: [] } },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
       },
     },
   }, async (request) => {
@@ -204,7 +634,45 @@ export async function createServer(config: AppConfig) {
     return okResult("navigated", await sessions.navigate(id, body.url));
   });
 
-  app.post("/api/sessions/:id/click", async (request) => {
+  app.post("/api/sessions/:id/click", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Click an element",
+      description: "Performs a click on the first matching visible element. Uses Playwright locator.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["selector"],
+        properties: {
+          selector: { type: "string", description: "CSS selector or Playwright locator string, e.g. 'button', '#submit', 'text=Click me'" },
+        },
+        example: { "selector": "button.primary" },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     const body = requireBody<{ selector?: string }>(request);
     if (!body.selector) {
@@ -213,7 +681,46 @@ export async function createServer(config: AppConfig) {
     return okResult("clicked", await sessions.click(id, body.selector));
   });
 
-  app.post("/api/sessions/:id/type", async (request) => {
+  app.post("/api/sessions/:id/type", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Type text into an element",
+      description: "Focuses the element then types the text with small delay. First clicks the element.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["selector"],
+        properties: {
+          selector: { type: "string", description: "CSS selector or locator" },
+          text: { type: "string", description: "Text to type" },
+        },
+        example: { "selector": "textarea[name='message']", "text": "Hello from the lab" },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     const body = requireBody<{ selector?: string; text?: string }>(request);
     if (!body.selector) {
@@ -222,7 +729,45 @@ export async function createServer(config: AppConfig) {
     return okResult("typed", await sessions.type(id, body.selector, body.text ?? ""));
   });
 
-  app.post("/api/sessions/:id/key", async (request) => {
+  app.post("/api/sessions/:id/key", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Press a keyboard key",
+      description: "Sends a key press event (e.g. Enter, Escape, ArrowDown). Does not require a selector.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["key"],
+        properties: {
+          key: { type: "string", description: "Key name as accepted by Playwright keyboard.press, e.g. 'Enter', 'Control+KeyA'" },
+        },
+        example: { "key": "Enter" },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     const body = requireBody<{ key?: string }>(request);
     if (!body.key) {
@@ -231,7 +776,45 @@ export async function createServer(config: AppConfig) {
     return okResult("key-pressed", await sessions.pressKey(id, body.key));
   });
 
-  app.post("/api/sessions/:id/evaluate", async (request) => {
+  app.post("/api/sessions/:id/evaluate", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Evaluate JavaScript in the page",
+      description: "Runs arbitrary JS via page.evaluate. Returns the result. Use with caution; no sandbox beyond Chromium's.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["script"],
+        properties: {
+          script: { type: "string", description: "JavaScript expression or IIFE to evaluate in the page context." },
+        },
+        example: { "script": "document.title" },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "BrowserSessionStatus#" },
+                },
+                required: ["ok", "data"],
+              },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     const body = requireBody<{ script?: string }>(request);
     if (!body.script) {
@@ -240,22 +823,123 @@ export async function createServer(config: AppConfig) {
     return okResult("evaluated", await sessions.evaluate(id, body.script));
   });
 
-  app.post("/api/sessions/:id/reload", async (request) => {
+  app.post("/api/sessions/:id/reload", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Reload the current page",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        additionalProperties: false,
+        example: {},
+      },
+      response: {
+        200: { $ref: "OkResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("navigated", await sessions.reload(id));
   });
 
-  app.post("/api/sessions/:id/back", async (request) => {
+  app.post("/api/sessions/:id/back", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Navigate back in history",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        additionalProperties: false,
+        example: {},
+      },
+      response: {
+        200: { $ref: "OkResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("navigated", await sessions.back(id));
   });
 
-  app.post("/api/sessions/:id/forward", async (request) => {
+  app.post("/api/sessions/:id/forward", {
+    schema: {
+      tags: ["Sessions"],
+      summary: "Navigate forward in history",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        additionalProperties: false,
+        example: {},
+      },
+      response: {
+        200: { $ref: "OkResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("navigated", await sessions.forward(id));
   });
 
-  app.get("/api/sessions/:id/screenshot", async (request, reply) => {
+  app.get("/api/sessions/:id/screenshot", {
+    schema: {
+      tags: ["Diagnostics"],
+      summary: "Capture screenshot of the current page",
+      description: "Takes a PNG screenshot of the visible viewport. By default returns a JSON response containing a data: URL. Append ?format=png to receive the raw image bytes directly (useful for saving or piping).",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      querystring: {
+        type: "object",
+        properties: {
+          format: {
+            type: "string",
+            enum: ["png"],
+            description: "When set to 'png' the response body is the raw image instead of { dataUrl: '...' }",
+          },
+        },
+      },
+      response: {
+        200: {
+          description: "Screenshot (JSON data URL or raw PNG)",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "ScreenshotData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "screenshot", data: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==" } },
+            },
+            "image/png": {
+              schema: { type: "string", format: "binary" },
+            },
+          },
+        },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const query = request.query as { format?: string } | undefined;
     const dataUrl = await sessions.screenshot(id);
@@ -266,22 +950,153 @@ export async function createServer(config: AppConfig) {
     return okResult("screenshot", { dataUrl });
   });
 
-  app.get("/api/sessions/:id/state", async (request) => {
+  app.get("/api/sessions/:id/state", {
+    schema: {
+      tags: ["Diagnostics"],
+      summary: "Get rich page state",
+      description: "Returns title, currentUrl, visible text, list of interactive elements with good selectors, focused element, console logs, recent errors, and current media configuration. This is the primary observation endpoint for agents.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "PageState#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "state", data: { sessionId: "0615f8c9-...", currentUrl: "https://example.com", title: "Example Domain", visibleText: "This domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission.", elements: [{ tag: "a", selector: "a", text: "More information..." }], focusedElement: null, consoleLogs: [], recentErrors: [], media: { camera: { mode: "off", active: false }, mic: { mode: "off", active: false } }, timestamp: "2026-06-12T08:12:10.000Z" } },
+            },
+          },
+        },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("state", await sessions.pageState(id));
   });
 
-  app.post("/api/sessions/:id/media/camera", async (request) => {
+  app.post("/api/sessions/:id/media/camera", {
+    schema: {
+      tags: ["Media"],
+      summary: "Configure synthetic camera input",
+      description: "Updates the fake video device seen by the page's getUserMedia/WebRTC. Changing camera source (except to 'off'/'test-pattern') will **relaunch** the Chromium instance for that session (current URL is restored but transient page state may be lost). Disclosure watermark is burned in by ffmpeg when enabled. Request body examples: off: {\"mode\":\"off\"}, test-pattern: {\"mode\":\"test-pattern\"}, image: {\"mode\":\"image\",\"assetId\":\"...\",\"disclosure\":{\"enabled\":true,\"label\":\"AI-assisted\"}}",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["mode"],
+        properties: {
+          mode: {
+            type: "string",
+            enum: ["off", "test-pattern", "generated", "image", "video"],
+            description: "off = disable, test-pattern = built-in Chromium fake, image/video = use uploaded asset converted to Y4M",
+          },
+          assetId: { type: "string", description: "Asset ID (from POST /api/assets). Required for image and video modes." },
+          loop: { type: "boolean", default: true, description: "Loop the video clip (video mode only)." },
+          disclosure: {
+            type: "object",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              label: { type: "string", example: "AI-assisted" },
+            },
+            description: "Optional text overlay (burned into the Y4M stream via ffmpeg drawtext).",
+          },
+        },
+        example: {
+          mode: "image",
+          assetId: "a1b2c3d4-...",
+          disclosure: { enabled: true, label: "AI-assisted" },
+        },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "MediaUpdateData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "media-updated", data: { id: "0615f8c9-...", active: true, currentUrl: "https://example.com", media: { camera: { mode: "image", active: true, assetId: "a1b2c3d4-...", disclosure: { enabled: true, label: "AI-assisted" } }, mic: { mode: "off", active: false } }, consoleLogs: [], recentErrors: [] } },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("media-updated", await sessions.setCameraSource(id, requireBody(request)));
   });
 
-  app.post("/api/sessions/:id/media/mic", async (request) => {
+  app.post("/api/sessions/:id/media/mic", {
+    schema: {
+      tags: ["Media"],
+      summary: "Set or change the synthetic microphone source",
+      description: "Changes the fake mic. Requires browser relaunch in most cases. Modes: off, silence, audio-file, tts. 'silence' also installs a Web Audio getUserMedia fallback. Request body examples: off: {\"mode\":\"off\"}, silence: {\"mode\":\"silence\"}, tts: {\"mode\":\"tts\",\"text\":\"Hello, this is a synthetic microphone.\",\"voice\":\"default\"}, audio-file: {\"mode\":\"audio-file\",\"assetId\":\"...\",\"loop\":false}",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["mode"],
+        properties: {
+          mode: { type: "string", enum: ["off", "silence", "audio-file", "tts"], description: "Microphone source mode." },
+          assetId: { type: "string", description: "For audio-file mode." },
+          text: { type: "string", description: "For tts mode." },
+          voice: { type: "string", description: "Optional voice for tts." },
+          loop: { type: "boolean", description: "For audio-file with loop." },
+        },
+        example: { "mode": "tts", "text": "Hello, this is a synthetic microphone.", "voice": "default" },
+      },
+      response: {
+        200: { $ref: "OkResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+        501: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("media-updated", await sessions.setMicSource(id, requireBody(request)));
   });
 
-  app.get("/api/sessions/:id/stream", async (request, reply) => {
+  app.get("/api/sessions/:id/stream", {
+    schema: {
+      tags: ["Diagnostics"],
+      summary: "SSE screenshot + status stream",
+      description: "Server-sent events endpoint. Emits 'screenshot' events with data URL + full status every ~3s. Useful for live observation without polling.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      response: {
+        200: { description: "text/event-stream" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -301,7 +1116,30 @@ export async function createServer(config: AppConfig) {
     request.raw.on("close", () => clearInterval(timer));
   });
 
-  app.get("/api/assets", async () => {
+  app.get("/api/assets", {
+    schema: {
+      tags: ["Assets"],
+      summary: "List all assets",
+      description: "Returns metadata for uploaded images/videos/audios and generated TTS/silence assets. Does not include the file bytes (use /file endpoint).",
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "AssetListResponse#" },
+                },
+                required: ["ok", "data"],
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async () => {
     return okResult("state", assets.list());
   });
 
@@ -311,8 +1149,35 @@ export async function createServer(config: AppConfig) {
       summary: "Upload an asset (image, video, or audio)",
       description: "Uploaded files can be used as synthetic camera or microphone sources.",
       consumes: ["multipart/form-data"],
+      body: {
+        type: "object",
+        properties: {
+          file: {
+            type: "string",
+            format: "binary",
+            description: "The file to upload (image, video, or audio). Use multipart/form-data with field name 'file'."
+          }
+        },
+        required: ["file"]
+      },
       response: {
-        200: { type: "object", additionalProperties: true },
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "AssetData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "created", data: { id: "a1b2c3d4-...", kind: "image", originalName: "avatar.png", safeName: "avatar.png", mimeType: "image/png", bytes: 12345, createdAt: "2026-06-12T08:12:05.000Z" } },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
       },
     },
   }, async (request) => {
@@ -323,7 +1188,22 @@ export async function createServer(config: AppConfig) {
     return okResult("created", await assets.createFromUpload(upload));
   });
 
-  app.get("/api/assets/:id/file", async (request, reply) => {
+  app.get("/api/assets/:id/file", {
+    schema: {
+      tags: ["Assets"],
+      summary: "Download an asset file",
+      description: "Returns the raw bytes of an uploaded or generated asset (image, video, or audio).",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Asset UUID returned by POST /api/assets or POST /api/tts" } },
+      },
+      response: {
+        200: { description: "The asset file (Content-Type based on original mime type)" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const asset = assets.get(id);
     if (!asset) {
@@ -344,9 +1224,26 @@ export async function createServer(config: AppConfig) {
           text: { type: "string" },
           voice: { type: "string" },
         },
+        example: { "text": "Hello, I am testing audio.", "voice": "default" },
       },
       response: {
-        200: { type: "object", additionalProperties: true },
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "TTSData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: { ok: true, action: "created", data: { id: "tts-uuid-1234", kind: "audio", originalName: "tts.wav", safeName: "tts.wav", mimeType: "audio/wav", bytes: 4821, createdAt: "2026-06-12T08:12:09.000Z" } },
+            },
+          },
+        },
+        400: { $ref: "ErrorResponse#" },
       },
     },
   }, async (request) => {
@@ -375,13 +1272,13 @@ export async function createServer(config: AppConfig) {
     return reply.type("text/html").send(renderLitePage(config, request, sessions));
   });
 
-  app.post("/lite/create", async (request, reply) => {
+  app.post("/lite/create", { schema: { hide: true } }, async (request, reply) => {
     const body = request.body as { initialUrl?: string } | undefined;
     const session = await sessions.createSession(body?.initialUrl || undefined);
     return reply.redirect(`/lite?session=${encodeURIComponent(session.id)}`);
   });
 
-  app.post("/lite/navigate", async (request, reply) => {
+  app.post("/lite/navigate", { schema: { hide: true } }, async (request, reply) => {
     const body = request.body as { session?: string; url?: string } | undefined;
     if (!body?.session || !body.url) {
       throw new HttpError(400, "FORM_REQUIRED", "session and url are required");
@@ -390,7 +1287,7 @@ export async function createServer(config: AppConfig) {
     return reply.redirect(`/lite?session=${encodeURIComponent(body.session)}`);
   });
 
-  app.post("/lite/action", async (request, reply) => {
+  app.post("/lite/action", { schema: { hide: true } }, async (request, reply) => {
     const body = request.body as {
       session?: string;
       action?: string;
