@@ -15,7 +15,9 @@ export type SessionAction =
   | "state"
   | "media-updated"
   | "closed"
-  | "error";
+  | "error"
+  | "moved"
+  | "scrolled";
 
 export interface DisclosureConfig {
   enabled: boolean;

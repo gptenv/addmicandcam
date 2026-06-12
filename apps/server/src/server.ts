@@ -34,6 +34,54 @@ function toFastifySchema(schema: unknown): unknown {
   );
 }
 
+function normalizeOpenApiSchemaRefs(spec: any) {
+  const schemas = spec?.components?.schemas;
+  if (!schemas || typeof schemas !== "object") {
+    return spec;
+  }
+
+  const aliases = new Map<string, string>();
+  for (const [name, schema] of Object.entries(schemas)) {
+    const title = schema && typeof schema === "object" ? (schema as { title?: unknown }).title : undefined;
+    if (name.startsWith("def-") && typeof title === "string" && schemas[title]) {
+      aliases.set(`#/components/schemas/${name}`, `#/components/schemas/${title}`);
+    }
+  }
+
+  if (aliases.size === 0) {
+    return spec;
+  }
+
+  const seen = new WeakSet<object>();
+  const rewriteRefs = (value: unknown): void => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    if (seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        rewriteRefs(item);
+      }
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    if (typeof record.$ref === "string" && aliases.has(record.$ref)) {
+      record.$ref = aliases.get(record.$ref);
+    }
+    for (const child of Object.values(record)) {
+      rewriteRefs(child);
+    }
+  };
+
+  rewriteRefs(spec);
+  return spec;
+}
+
 export async function createServer(config: AppConfig) {
   await mkdir(config.dataDir, { recursive: true });
   const assets = new AssetStore(config.dataDir);
@@ -132,6 +180,31 @@ export async function createServer(config: AppConfig) {
         data: { type: "object", additionalProperties: true },
       },
       required: ["ok"],
+    },
+
+    InputResultResponse: {
+      type: "object",
+      properties: {
+        ok: { type: "boolean", example: true },
+        action: { type: "string", example: "clicked" },
+        data: { $ref: "#/components/schemas/BrowserSessionStatus" },
+      },
+      required: ["ok", "data"],
+      example: {
+        ok: true,
+        action: "clicked",
+        data: {
+          id: "0615f8c9-...",
+          active: true,
+          currentUrl: "https://example.com",
+          media: {
+            camera: { mode: "off", active: false },
+            mic: { mode: "off", active: false },
+          },
+          consoleLogs: [],
+          recentErrors: [],
+        },
+      },
     },
 
     AssetListResponse: {
@@ -360,7 +433,7 @@ export async function createServer(config: AppConfig) {
     async (request, reply) => {
       // Deep clone via JSON roundtrip guarantees a plain object that survives serialization
       // (the swagger plugin can return objects with getters/proxies).
-      const spec = JSON.parse(JSON.stringify(app.swagger()));
+      const spec = normalizeOpenApiSchemaRefs(JSON.parse(JSON.stringify(app.swagger())));
       const count = Object.keys(spec.paths || {}).length;
       request.log.info({ pathCount: count }, "openapi.json requested");
       return reply.send(spec);
@@ -427,6 +500,12 @@ export async function createServer(config: AppConfig) {
   });
 
   app.post("/api/sessions", {
+    preValidation: (request, _reply, done) => {
+      if (request.body === undefined) {
+        request.body = {};
+      }
+      done();
+    },
     schema: {
       tags: ["Sessions"],
       summary: "Create a new browser session",
@@ -893,6 +972,167 @@ export async function createServer(config: AppConfig) {
   }, async (request) => {
     const { id } = request.params as { id: string };
     return okResult("navigated", await sessions.forward(id));
+  });
+
+  // New coordinate-based input endpoints for interactive viewport / Agent Mode passthrough.
+  // Coordinates are in Playwright viewport space (e.g. 1280x720). Frontend scales from rendered image.
+  app.post("/api/sessions/:id/input/click", {
+    schema: {
+      tags: ["Input"],
+      summary: "Click at viewport coordinates",
+      description: "Sends a mouse click at the given (x, y) in the browser viewport. Use this for interactive passthrough instead of (or in addition to) selector clicks.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["x", "y"],
+        properties: {
+          x: { type: "number", description: "Viewport x coordinate" },
+          y: { type: "number", description: "Viewport y coordinate" },
+          button: { type: "string", enum: ["left", "right", "middle"], default: "left" },
+        },
+        example: { "x": 320, "y": 240, "button": "left" },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = requireBody<{ x: number; y: number; button?: "left" | "right" | "middle" }>(request);
+    return okResult("clicked", await sessions.mouseClick(id, body));
+  });
+
+  app.post("/api/sessions/:id/input/move", {
+    schema: {
+      tags: ["Input"],
+      summary: "Move mouse to viewport coordinates",
+      description: "Moves the mouse cursor to the given (x, y) in viewport. Useful for hover effects before click.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["x", "y"],
+        properties: {
+          x: { type: "number" },
+          y: { type: "number" },
+        },
+        example: { "x": 320, "y": 240 },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = requireBody<{ x: number; y: number }>(request);
+    return okResult("moved", await sessions.mouseMove(id, body));
+  });
+
+  app.post("/api/sessions/:id/input/wheel", {
+    preValidation: (request, _reply, done) => {
+      if (request.body === undefined) {
+        request.body = {};
+      }
+      done();
+    },
+    schema: {
+      tags: ["Input"],
+      summary: "Scroll / wheel at current position",
+      description: "Simulates mouse wheel scroll. Positive deltaY scrolls down.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        properties: {
+          deltaX: { type: "number", default: 0 },
+          deltaY: { type: "number", default: 0 },
+        },
+        example: { "deltaX": 0, "deltaY": 420 },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { deltaX?: number; deltaY?: number } | undefined) ?? {};
+    return okResult("scrolled", await sessions.mouseWheel(id, body));
+  });
+
+  app.post("/api/sessions/:id/input/type", {
+    schema: {
+      tags: ["Input"],
+      summary: "Type text at current focus (viewport mode)",
+      description: "Types printable text using keyboard. For agent passthrough over the screenshot surface. Does not require selector.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["text"],
+        properties: {
+          text: { type: "string", description: "Text to type into focused element or page" },
+        },
+        example: { "text": "hello" },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = requireBody<{ text: string }>(request);
+    return okResult("typed", await sessions.keyboardType(id, body));
+  });
+
+  app.post("/api/sessions/:id/input/key", {
+    schema: {
+      tags: ["Input"],
+      summary: "Press a key (viewport mode)",
+      description: "Presses a special key or combination. Reuses existing keyboard press. Good for Enter, arrows, etc. when interacting with the screenshot viewport.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        required: ["key"],
+        properties: {
+          key: { type: "string", description: "Key to press, e.g. Enter, ArrowDown, Escape, Backspace" },
+        },
+        example: { "key": "Enter" },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = requireBody<{ key: string }>(request);
+    return okResult("key-pressed", await sessions.keyboardPress(id, body.key));
   });
 
   app.get("/api/sessions/:id/screenshot", {

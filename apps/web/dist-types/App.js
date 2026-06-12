@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, assetFileUrl, shortJson } from "./api.js";
 export default function App() {
     const path = window.location.pathname;
@@ -82,6 +82,172 @@ function HomePage() {
         setResult(response);
     };
     return (_jsxs(Shell, { children: [_jsx("section", { className: "hero-panel", "aria-labelledby": "home-title", children: _jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Authorized testing and demos only" }), _jsx("h1", { id: "home-title", children: "Remote browser sessions with synthetic media controls" }), _jsx("p", { children: "Create an isolated Playwright Chromium session, drive it through UI or JSON, and attach disclosed synthetic camera or microphone sources for permissioned labs." })] }) }), _jsx(StatusGrid, { task: "Create or attach to a browser session, then upload media and navigate.", result: result, recommendation: "Start with Create Session. After upload, open the session page to set camera or mic sources." }), _jsxs("section", { className: "controls-grid", "aria-label": "Main controls", children: [_jsxs(Panel, { title: "Session", children: [_jsx("button", { id: "create-session-button", className: "primary", type: "button", onClick: createSession, children: "Create Session" }), _jsxs("label", { className: "field", children: ["Existing session id", _jsx("input", { id: "existing-session-id", value: sessionId, onChange: (event) => setSessionId(event.target.value) })] }), _jsx("button", { id: "open-existing-session-button", type: "button", onClick: openExisting, children: "Open Existing Session" }), _jsx("button", { id: "refresh-sessions-button", type: "button", onClick: () => void refresh(), children: "Refresh Sessions" })] }), _jsxs(Panel, { title: "Upload Media", children: [_jsxs("label", { className: "file-button", children: ["Upload Avatar Image", _jsx("input", { id: "upload-avatar-image", type: "file", accept: "image/*", onChange: (event) => void upload(event.target.files?.[0]) })] }), _jsxs("label", { className: "file-button", children: ["Upload Avatar Video", _jsx("input", { id: "upload-avatar-video", type: "file", accept: "video/*", onChange: (event) => void upload(event.target.files?.[0]) })] }), _jsxs("label", { className: "file-button", children: ["Upload Audio", _jsx("input", { id: "upload-audio", type: "file", accept: "audio/*", onChange: (event) => void upload(event.target.files?.[0]) })] }), _jsxs("label", { className: "field", children: ["TTS text", _jsx("textarea", { id: "tts-text", value: ttsText, onChange: (event) => setTtsText(event.target.value) })] }), _jsx("button", { id: "generate-tts-audio-button", type: "button", onClick: generateTts, children: "Generate TTS Audio" })] }), _jsxs(Panel, { title: "Quick Actions", children: [_jsxs("label", { className: "field", children: ["Navigate URL", _jsx("input", { id: "navigate-url", value: url, onChange: (event) => setUrl(event.target.value) })] }), _jsx("button", { id: "navigate-button", type: "button", onClick: navigate, disabled: !sessionId, children: "Navigate" }), _jsx("button", { id: "take-screenshot-button", type: "button", onClick: () => void quickAction("screenshot"), disabled: !sessionId, children: "Take Screenshot" }), _jsx("button", { id: "dump-page-state-button", type: "button", onClick: () => void quickAction("state"), disabled: !sessionId, children: "Dump Page State" }), _jsx("a", { id: "show-swagger-button", className: "button-link", href: "/swagger", target: "_blank", rel: "noopener", children: "Swagger UI" }), _jsx("a", { id: "show-openapi-button", className: "button-link", href: "/openapi.json", target: "_blank", rel: "noopener", children: "OpenAPI Spec (JSON)" })] })] }), _jsxs("section", { className: "split", children: [_jsxs(Panel, { title: "Active Sessions", children: [sessions.length === 0 ? _jsx("p", { children: "No sessions yet." }) : null, _jsx("ul", { className: "plain-list", children: sessions.map((session) => (_jsxs("li", { children: [_jsx("a", { id: `session-link-${session.id}`, href: `/session/${session.id}`, children: session.id }), _jsx("span", { children: session.currentUrl })] }, session.id))) })] }), _jsxs(Panel, { title: "Assets", children: [assets.length === 0 ? _jsx("p", { children: "No uploaded or generated assets yet." }) : null, _jsx("ul", { className: "plain-list", children: assets.map((asset) => (_jsxs("li", { children: [_jsx("code", { children: asset.id }), _jsxs("span", { children: [asset.kind, " \u00B7 ", asset.originalName] })] }, asset.id))) })] })] })] }));
+}
+function InteractiveRemoteViewport({ id, onResult }) {
+    const [screenshot, setScreenshot] = useState(null);
+    const [lastInput, setLastInput] = useState("");
+    const [streamError, setStreamError] = useState("");
+    const imgRef = useRef(null);
+    const lastRefreshRef = useRef(0);
+    const refreshScreenshot = async () => {
+        const now = Date.now();
+        if (now - lastRefreshRef.current < 250)
+            return;
+        lastRefreshRef.current = now;
+        const response = await apiRequest(`/api/sessions/${encodeURIComponent(id)}/screenshot`);
+        if (response.ok && response.data?.dataUrl) {
+            setScreenshot(response.data.dataUrl);
+        }
+    };
+    useEffect(() => {
+        const es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream`);
+        const handleScreenshot = (ev) => {
+            try {
+                const payload = JSON.parse(ev.data || "{}");
+                if (payload.dataUrl) {
+                    setScreenshot(payload.dataUrl);
+                    setStreamError("");
+                }
+                if (payload.status) {
+                    // Surface the status from screenshot SSE event to parent (updates Last API result etc).
+                    // Uses BrowserSessionStatus shape in data; types preserved via ApiResult<unknown>.
+                    onResult?.({ ok: true, action: "screenshot", data: payload.status });
+                }
+            }
+            catch {
+                // Ignore malformed SSE payloads; the next tick will retry.
+            }
+        };
+        es.addEventListener("screenshot", handleScreenshot);
+        const handleStreamError = (ev) => {
+            try {
+                const payload = JSON.parse(ev.data || "{}");
+                setStreamError(payload.message ? `stream error: ${payload.message}` : "stream error");
+            }
+            catch {
+                setStreamError("stream error");
+            }
+        };
+        es.addEventListener("error", handleStreamError);
+        es.onerror = () => {
+            setStreamError((prev) => prev || "stream disconnected");
+        };
+        es.onopen = () => {
+            setStreamError("");
+        };
+        es.onmessage = (ev) => {
+            if (ev.data && ev.data.includes("dataUrl")) {
+                handleScreenshot(ev);
+            }
+        };
+        return () => {
+            es.close();
+        };
+    }, [id, onResult]);
+    const getScaledCoords = (clientX, clientY) => {
+        const img = imgRef.current;
+        if (!img)
+            return null;
+        const rect = img.getBoundingClientRect();
+        const displayW = rect.width || 1;
+        const displayH = rect.height || 1;
+        const natW = img.naturalWidth || 1280;
+        const natH = img.naturalHeight || 720;
+        const relX = (clientX - rect.left) / displayW;
+        const relY = (clientY - rect.top) / displayH;
+        return {
+            x: Math.max(0, Math.min(Math.round(relX * natW), natW - 1)),
+            y: Math.max(0, Math.min(Math.round(relY * natH), natH - 1)),
+        };
+    };
+    const sendInput = async (path, body, label, refresh = true) => {
+        const res = await apiRequest(`/api/sessions/${encodeURIComponent(id)}/input/${path}`, {
+            method: "POST",
+            body: JSON.stringify(body)
+        });
+        setLastInput(label);
+        onResult?.(res);
+        if (refresh) {
+            void refreshScreenshot();
+        }
+        return res;
+    };
+    const handlePointerDown = async (event) => {
+        event.preventDefault();
+        event.currentTarget.focus();
+        if (event.target.closest("#interactive-viewport-status")) {
+            return;
+        }
+        const coords = getScaledCoords(event.clientX, event.clientY);
+        if (!coords) {
+            void refreshScreenshot();
+            return;
+        }
+        const { x, y } = coords;
+        const button = event.button === 1 ? "middle" : event.button === 2 ? "right" : "left";
+        if (event.currentTarget.setPointerCapture) {
+            event.currentTarget.setPointerCapture(event.pointerId);
+        }
+        await sendInput("click", { x, y, button }, `click(${x}, ${y})`);
+    };
+    const handlePointerMove = (event) => {
+        if (event.buttons === 0) {
+            return;
+        }
+        const coords = getScaledCoords(event.clientX, event.clientY);
+        if (!coords) {
+            return;
+        }
+        const { x, y } = coords;
+        void sendInput("move", { x, y }, `move(${x}, ${y})`, false);
+    };
+    const handleWheel = async (event) => {
+        event.preventDefault();
+        const coords = getScaledCoords(event.clientX, event.clientY);
+        if (!coords) {
+            void refreshScreenshot();
+            return;
+        }
+        const { x, y } = coords;
+        await apiRequest(`/api/sessions/${encodeURIComponent(id)}/input/move`, {
+            method: "POST",
+            body: JSON.stringify({ x, y })
+        }).catch(() => undefined);
+        await sendInput("wheel", { deltaX: event.deltaX, deltaY: event.deltaY }, `wheel(${Math.round(event.deltaX)}, ${Math.round(event.deltaY)})`);
+    };
+    const handleKeyDown = async (event) => {
+        event.preventDefault();
+        const specialKeys = [
+            "Enter",
+            "Backspace",
+            "Tab",
+            "Escape",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown"
+        ];
+        if (event.key === " ") {
+            await sendInput("type", { text: " " }, "type Space");
+        }
+        else if (specialKeys.includes(event.key) || event.key.length > 1) {
+            await sendInput("key", { key: event.key }, `key ${event.key}`);
+        }
+        else {
+            await sendInput("type", { text: event.key }, `type ${event.key}`);
+        }
+    };
+    const initializeViewport = () => {
+        if (!screenshot) {
+            void refreshScreenshot();
+        }
+    };
+    return (_jsxs("div", { id: "interactive-remote-viewport", className: "interactive-viewport", tabIndex: 0, onFocus: initializeViewport, onPointerDown: (event) => void handlePointerDown(event), onPointerMove: handlePointerMove, onContextMenu: (event) => event.preventDefault(), onWheel: (event) => void handleWheel(event), onKeyDown: (event) => void handleKeyDown(event), "aria-label": "Interactive remote browser viewport. Click to focus and interact. Use mouse wheel to scroll. Type when focused.", children: [screenshot ? (_jsx("img", { id: "latest-screenshot", ref: imgRef, className: "interactive-viewport-image", src: screenshot, alt: "Live interactive browser viewport", draggable: false })) : (_jsx("div", { className: "empty-screenshot interactive-viewport-empty", id: "latest-screenshot-empty", children: "Waiting for live screenshot stream..." })), _jsxs("div", { id: "interactive-viewport-status", className: "interactive-viewport-status", children: ["Interactive viewport: click to focus, wheel to scroll, type to send keys. Last input: ", lastInput || "none yet", streamError ? ` | ${streamError}` : ""] })] }));
 }
 function SessionPage({ id }) {
     const [status, setStatus] = useState(null);
@@ -174,7 +340,7 @@ function SessionPage({ id }) {
             })
         }));
     };
-    return (_jsxs(Shell, { children: [_jsx("section", { className: "session-heading", children: _jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Session" }), _jsx("h1", { id: "session-title", children: id }), _jsx("p", { id: "session-current-url", children: status?.currentUrl ?? "Loading..." })] }) }), _jsx(StatusGrid, { task: status?.active ? "Browser session is active." : "Browser session is starting or unavailable.", result: result, recommendation: "Use Dump Page State to get selectors, then Click, Type, or Press Key. Set media before opening a camera test page." }), _jsxs("section", { className: "session-layout", children: [_jsxs("div", { className: "left-column", children: [_jsxs(Panel, { title: "Remote Browser View", children: [_jsxs("div", { className: "button-row", children: [_jsx("button", { id: "session-screenshot-button", type: "button", onClick: takeScreenshot, children: "Take Screenshot" }), _jsx("button", { id: "session-dump-state-button", type: "button", onClick: dumpState, children: "Dump Page State" }), _jsx("button", { id: "session-reload-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/reload`, { method: "POST" })), children: "Reload" }), _jsx("button", { id: "session-back-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/back`, { method: "POST" })), children: "Back" }), _jsx("button", { id: "session-forward-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/forward`, { method: "POST" })), children: "Forward" })] }), status?.latestScreenshotDataUrl ? (_jsx("img", { id: "latest-screenshot", className: "screenshot", src: status.latestScreenshotDataUrl, alt: "Latest browser screenshot" })) : (_jsx("div", { className: "empty-screenshot", id: "latest-screenshot-empty", children: "No screenshot yet" }))] }), _jsx(Panel, { title: "Page State", children: _jsx("pre", { id: "page-state-output", children: pageState ? shortJson(pageState) : "Click Dump Page State to inspect selectors and visible text." }) })] }), _jsxs("div", { className: "right-column", children: [_jsx(Panel, { title: "Navigation", children: _jsxs("form", { onSubmit: submitNavigate, children: [_jsxs("label", { className: "field", children: ["Navigate to URL", _jsx("input", { id: "session-navigate-url", value: url, onChange: (event) => setUrl(event.target.value) })] }), _jsx("button", { id: "session-navigate-button", className: "primary", type: "submit", children: "Navigate" })] }) }), _jsxs(Panel, { title: "Interaction", children: [_jsxs("label", { className: "field", children: ["Selector", _jsx("input", { id: "selector-input", value: selector, onChange: (event) => setSelector(event.target.value) })] }), _jsx("div", { className: "button-row", children: _jsx("button", { id: "click-selector-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/click`, { method: "POST", body: JSON.stringify({ selector }) })), children: "Click Selector" }) }), _jsxs("label", { className: "field", children: ["Text", _jsx("textarea", { id: "type-text", value: typeText, onChange: (event) => setTypeText(event.target.value) })] }), _jsx("button", { id: "type-into-selector-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/type`, {
+    return (_jsxs(Shell, { children: [_jsx("section", { className: "session-heading", children: _jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Session" }), _jsx("h1", { id: "session-title", children: id }), _jsx("p", { id: "session-current-url", children: status?.currentUrl ?? "Loading..." })] }) }), _jsx(StatusGrid, { task: status?.active ? "Browser session is active." : "Browser session is starting or unavailable.", result: result, recommendation: "Use Dump Page State to get selectors, then Click, Type, or Press Key. Set media before opening a camera test page." }), _jsxs("section", { className: "session-layout", children: [_jsxs("div", { className: "left-column", children: [_jsxs(Panel, { title: "Remote Browser View", children: [_jsxs("div", { className: "button-row", children: [_jsx("button", { id: "session-screenshot-button", type: "button", onClick: takeScreenshot, children: "Take Screenshot" }), _jsx("button", { id: "session-dump-state-button", type: "button", onClick: dumpState, children: "Dump Page State" }), _jsx("button", { id: "session-reload-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/reload`, { method: "POST" })), children: "Reload" }), _jsx("button", { id: "session-back-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/back`, { method: "POST" })), children: "Back" }), _jsx("button", { id: "session-forward-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/forward`, { method: "POST" })), children: "Forward" })] }), _jsx(InteractiveRemoteViewport, { id: id, onResult: setResult })] }), _jsx(Panel, { title: "Page State", children: _jsx("pre", { id: "page-state-output", children: pageState ? shortJson(pageState) : "Click Dump Page State to inspect selectors and visible text." }) })] }), _jsxs("div", { className: "right-column", children: [_jsx(Panel, { title: "Navigation", children: _jsxs("form", { onSubmit: submitNavigate, children: [_jsxs("label", { className: "field", children: ["Navigate to URL", _jsx("input", { id: "session-navigate-url", value: url, onChange: (event) => setUrl(event.target.value) })] }), _jsx("button", { id: "session-navigate-button", className: "primary", type: "submit", children: "Navigate" })] }) }), _jsxs(Panel, { title: "Interaction", children: [_jsxs("label", { className: "field", children: ["Selector", _jsx("input", { id: "selector-input", value: selector, onChange: (event) => setSelector(event.target.value) })] }), _jsx("div", { className: "button-row", children: _jsx("button", { id: "click-selector-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/click`, { method: "POST", body: JSON.stringify({ selector }) })), children: "Click Selector" }) }), _jsxs("label", { className: "field", children: ["Text", _jsx("textarea", { id: "type-text", value: typeText, onChange: (event) => setTypeText(event.target.value) })] }), _jsx("button", { id: "type-into-selector-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/type`, {
                                             method: "POST",
                                             body: JSON.stringify({ selector, text: typeText })
                                         })), children: "Type into Selector" }), _jsxs("label", { className: "field", children: ["Key", _jsx("input", { id: "key-input", value: key, onChange: (event) => setKey(event.target.value) })] }), _jsx("button", { id: "press-key-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/key`, { method: "POST", body: JSON.stringify({ key }) })), children: "Press Key" }), _jsxs("label", { className: "field", children: ["Evaluate JS", _jsx("textarea", { id: "evaluate-script", value: script, onChange: (event) => setScript(event.target.value) })] }), _jsx("button", { id: "evaluate-js-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/evaluate`, { method: "POST", body: JSON.stringify({ script }) })), children: "Evaluate JS" })] }), _jsx(Panel, { title: "Synthetic Camera", children: _jsxs("form", { onSubmit: submitCamera, children: [_jsxs("label", { className: "field", children: ["Camera mode", _jsxs("select", { id: "camera-mode", value: cameraMode, onChange: (event) => setCameraMode(event.target.value), children: [_jsx("option", { value: "test-pattern", children: "test-pattern" }), _jsx("option", { value: "image", children: "image" }), _jsx("option", { value: "video", children: "video" }), _jsx("option", { value: "generated", children: "generated" }), _jsx("option", { value: "off", children: "off" })] })] }), _jsxs("label", { className: "field", children: ["Camera asset", _jsxs("select", { id: "camera-asset", value: cameraAssetId, onChange: (event) => setCameraAssetId(event.target.value), children: [_jsx("option", { value: "", children: "Select asset" }), cameraAssets.map((asset) => (_jsxs("option", { value: asset.id, children: [asset.kind, ": ", asset.originalName] }, asset.id)))] })] }), _jsxs("label", { className: "check", children: [_jsx("input", { id: "camera-disclosure-enabled", type: "checkbox", checked: disclosureEnabled, onChange: (event) => setDisclosureEnabled(event.target.checked) }), "Add disclosure watermark"] }), _jsxs("label", { className: "field", children: ["Watermark label", _jsx("input", { id: "camera-disclosure-label", value: disclosureLabel, onChange: (event) => setDisclosureLabel(event.target.value) })] }), _jsx("button", { id: "start-camera-feed-button", className: "primary", type: "submit", children: "Start Camera Feed" }), _jsx("button", { id: "stop-camera-feed-button", type: "button", onClick: () => void run(apiRequest(`/api/sessions/${id}/media/camera`, { method: "POST", body: JSON.stringify({ mode: "off" }) })), children: "Stop Camera" })] }) }), _jsx(Panel, { title: "Synthetic Microphone", children: _jsxs("form", { onSubmit: submitMic, children: [_jsxs("label", { className: "field", children: ["Mic mode", _jsxs("select", { id: "mic-mode", value: micMode, onChange: (event) => setMicMode(event.target.value), children: [_jsx("option", { value: "silence", children: "silence" }), _jsx("option", { value: "audio-file", children: "audio-file" }), _jsx("option", { value: "tts", children: "tts" }), _jsx("option", { value: "off", children: "off" })] })] }), _jsxs("label", { className: "field", children: ["Audio asset", _jsxs("select", { id: "mic-asset", value: micAssetId, onChange: (event) => setMicAssetId(event.target.value), children: [_jsx("option", { value: "", children: "Select asset" }), audioAssets.map((asset) => (_jsx("option", { value: asset.id, children: asset.originalName }, asset.id)))] })] }), _jsxs("label", { className: "field", children: ["Speak text using TTS", _jsx("textarea", { id: "mic-tts-text", value: micText, onChange: (event) => setMicText(event.target.value) })] }), _jsx("button", { id: "start-mic-feed-button", className: "primary", type: "submit", children: "Start Mic Feed" }), _jsx("button", { id: "stop-media-button", type: "button", onClick: () => void Promise.all([

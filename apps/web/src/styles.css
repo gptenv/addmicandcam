@@ -243,6 +243,40 @@ pre {
   font-weight: 700;
 }
 
+.interactive-viewport {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid #cbd8cf;
+  border-radius: 6px;
+  background: #101510;
+  cursor: crosshair;
+  overflow: hidden;
+  outline: none;
+}
+
+.interactive-viewport:focus,
+.interactive-viewport:focus-visible {
+  box-shadow: 0 0 0 3px #7bbf93;
+}
+
+.interactive-viewport-image,
+.interactive-viewport-empty {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  user-select: none;
+  touch-action: none;
+}
+
+.interactive-viewport-status {
+  border-top: 1px solid #d5dfd7;
+  background: #f7faf7;
+  color: #536256;
+  font-size: 0.78rem;
+  padding: 0.45rem 0.6rem;
+}
+
 audio {
   display: block;
   width: 100%;

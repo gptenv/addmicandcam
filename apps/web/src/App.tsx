@@ -7,7 +7,7 @@ import type {
   MicMode,
   PageState
 } from "@telepresence/shared";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, assetFileUrl, shortJson } from "./api.js";
 
 type ResultState = ApiResult<unknown> | null;
@@ -238,6 +238,208 @@ function HomePage() {
   );
 }
 
+function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (res: ApiResult<unknown>) => void }) {
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [lastInput, setLastInput] = useState<string>("");
+  const [streamError, setStreamError] = useState<string>("");
+  const imgRef = useRef<HTMLImageElement>(null);
+  const lastRefreshRef = useRef(0);
+
+  const refreshScreenshot = async () => {
+    const now = Date.now();
+    if (now - lastRefreshRef.current < 250) return;
+    lastRefreshRef.current = now;
+    const response = await apiRequest<{ dataUrl: string }>(`/api/sessions/${encodeURIComponent(id)}/screenshot`);
+    if (response.ok && response.data?.dataUrl) {
+      setScreenshot(response.data.dataUrl);
+    }
+  };
+
+  useEffect(() => {
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream`);
+    const handleScreenshot = (ev: MessageEvent) => {
+      try {
+        const payload = JSON.parse(ev.data || "{}");
+        if (payload.dataUrl) {
+          setScreenshot(payload.dataUrl);
+          setStreamError("");
+        }
+        if (payload.status) {
+          // Surface the status from screenshot SSE event to parent (updates Last API result etc).
+          // Uses BrowserSessionStatus shape in data; types preserved via ApiResult<unknown>.
+          onResult?.({ ok: true, action: "screenshot", data: payload.status });
+        }
+      } catch {
+        // Ignore malformed SSE payloads; the next tick will retry.
+      }
+    };
+    es.addEventListener("screenshot", handleScreenshot);
+    const handleStreamError = (ev: MessageEvent) => {
+      try {
+        const payload = JSON.parse(ev.data || "{}");
+        setStreamError(payload.message ? `stream error: ${payload.message}` : "stream error");
+      } catch {
+        setStreamError("stream error");
+      }
+    };
+    es.addEventListener("error", handleStreamError);
+    es.onerror = () => {
+      setStreamError((prev) => prev || "stream disconnected");
+    };
+    es.onopen = () => {
+      setStreamError("");
+    };
+    es.onmessage = (ev) => {
+      if (ev.data && ev.data.includes("dataUrl")) {
+        handleScreenshot(ev);
+      }
+    };
+    return () => {
+      es.close();
+    };
+  }, [id, onResult]);
+
+  const getScaledCoords = (clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    const displayW = rect.width || 1;
+    const displayH = rect.height || 1;
+    const natW = img.naturalWidth || 1280;
+    const natH = img.naturalHeight || 720;
+    const relX = (clientX - rect.left) / displayW;
+    const relY = (clientY - rect.top) / displayH;
+    return {
+      x: Math.max(0, Math.min(Math.round(relX * natW), natW - 1)),
+      y: Math.max(0, Math.min(Math.round(relY * natH), natH - 1)),
+    };
+  };
+
+  const sendInput = async (path: string, body: unknown, label: string, refresh = true) => {
+    const res = await apiRequest(`/api/sessions/${encodeURIComponent(id)}/input/${path}`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    setLastInput(label);
+    onResult?.(res);
+    if (refresh) {
+      void refreshScreenshot();
+    }
+    return res;
+  };
+
+  const handlePointerDown = async (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.focus();
+    if ((event.target as HTMLElement).closest("#interactive-viewport-status")) {
+      return;
+    }
+    const coords = getScaledCoords(event.clientX, event.clientY);
+    if (!coords) {
+      void refreshScreenshot();
+      return;
+    }
+    const { x, y } = coords;
+    const button = event.button === 1 ? "middle" : event.button === 2 ? "right" : "left";
+    if (event.currentTarget.setPointerCapture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    await sendInput("click", { x, y, button }, `click(${x}, ${y})`);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.buttons === 0) {
+      return;
+    }
+    const coords = getScaledCoords(event.clientX, event.clientY);
+    if (!coords) {
+      return;
+    }
+    const { x, y } = coords;
+    void sendInput("move", { x, y }, `move(${x}, ${y})`, false);
+  };
+
+  const handleWheel = async (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const coords = getScaledCoords(event.clientX, event.clientY);
+    if (!coords) {
+      void refreshScreenshot();
+      return;
+    }
+    const { x, y } = coords;
+    await apiRequest(`/api/sessions/${encodeURIComponent(id)}/input/move`, {
+      method: "POST",
+      body: JSON.stringify({ x, y })
+    }).catch(() => undefined);
+    await sendInput("wheel", { deltaX: event.deltaX, deltaY: event.deltaY }, `wheel(${Math.round(event.deltaX)}, ${Math.round(event.deltaY)})`);
+  };
+
+  const handleKeyDown = async (event: React.KeyboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const specialKeys = [
+      "Enter",
+      "Backspace",
+      "Tab",
+      "Escape",
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      "Delete",
+      "Home",
+      "End",
+      "PageUp",
+      "PageDown"
+    ];
+    if (event.key === " ") {
+      await sendInput("type", { text: " " }, "type Space");
+    } else if (specialKeys.includes(event.key) || event.key.length > 1) {
+      await sendInput("key", { key: event.key }, `key ${event.key}`);
+    } else {
+      await sendInput("type", { text: event.key }, `type ${event.key}`);
+    }
+  };
+
+  const initializeViewport = () => {
+    if (!screenshot) {
+      void refreshScreenshot();
+    }
+  };
+
+  return (
+    <div
+      id="interactive-remote-viewport"
+      className="interactive-viewport"
+      tabIndex={0}
+      onFocus={initializeViewport}
+      onPointerDown={(event) => void handlePointerDown(event)}
+      onPointerMove={handlePointerMove}
+      onContextMenu={(event) => event.preventDefault()}
+      onWheel={(event) => void handleWheel(event)}
+      onKeyDown={(event) => void handleKeyDown(event)}
+      aria-label="Interactive remote browser viewport. Click to focus and interact. Use mouse wheel to scroll. Type when focused."
+    >
+      {screenshot ? (
+        <img
+          id="latest-screenshot"
+          ref={imgRef}
+          className="interactive-viewport-image"
+          src={screenshot}
+          alt="Live interactive browser viewport"
+          draggable={false}
+        />
+      ) : (
+        <div className="empty-screenshot interactive-viewport-empty" id="latest-screenshot-empty">
+          Waiting for live screenshot stream...
+        </div>
+      )}
+      <div id="interactive-viewport-status" className="interactive-viewport-status">
+        Interactive viewport: click to focus, wheel to scroll, type to send keys. Last input: {lastInput || "none yet"}{streamError ? ` | ${streamError}` : ""}
+      </div>
+    </div>
+  );
+}
+
 function SessionPage({ id }: { id: string }) {
   const [status, setStatus] = useState<BrowserSessionStatus | null>(null);
   const [assets, setAssets] = useState<AssetMetadata[]>([]);
@@ -380,13 +582,7 @@ function SessionPage({ id }: { id: string }) {
                 Forward
               </button>
             </div>
-            {status?.latestScreenshotDataUrl ? (
-              <img id="latest-screenshot" className="screenshot" src={status.latestScreenshotDataUrl} alt="Latest browser screenshot" />
-            ) : (
-              <div className="empty-screenshot" id="latest-screenshot-empty">
-                No screenshot yet
-              </div>
-            )}
+            <InteractiveRemoteViewport id={id} onResult={setResult} />
           </Panel>
 
           <Panel title="Page State">

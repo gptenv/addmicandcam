@@ -37,3 +37,12 @@ Security boundaries:
 - URL navigation is limited to `http` and `https`.
 - Local/private/reserved networks are blocked by default.
 - Allowlist and blocklist patterns can further constrain navigation.
+
+Interactive viewport passthrough (added for Agent Mode compatibility):
+
+- On `/session/:id` the "Remote Browser View" is now a live, focusable screenshot surface driven by the existing `/api/sessions/:id/stream` SSE endpoint.
+- User (or agent) clicks, wheels, and keypresses are captured on the rendered screenshot image.
+- Coordinates are scaled from CSS-display size to the screenshot's natural dimensions (Playwright viewport, typically 1280x720) and sent via new POST `/api/sessions/:id/input/*` endpoints (click, move, wheel, type, key).
+- Backend uses `page.mouse.click(x, y)`, `page.mouse.wheel(...)`, `page.keyboard.type(...)` / `press(...)` directly on the Playwright page.
+- This is screenshot-driven (not live DOM iframe embedding) so it is cross-origin safe and works with the existing synthetic-media and policy layers.
+- Limitations: latency of screenshot roundtrip, no direct DOM hit-testing from client (use /state for that), wheel/click position is "last known mouse" for some ops. Selector-based actions remain available for precision.

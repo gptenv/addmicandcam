@@ -199,6 +199,43 @@ export class SessionManager {
     return this.toStatus(session);
   }
 
+  async mouseClick(id: string, { x, y, button = "left" as "left" | "right" | "middle" }: { x: number; y: number; button?: "left" | "right" | "middle" }): Promise<BrowserSessionStatus> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    await page.mouse.click(x, y, { button });
+    await this.refreshPageMetadata(session);
+    return this.toStatus(session);
+  }
+
+  async mouseMove(id: string, { x, y }: { x: number; y: number }): Promise<BrowserSessionStatus> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    await page.mouse.move(x, y);
+    await this.refreshPageMetadata(session);
+    return this.toStatus(session);
+  }
+
+  async mouseWheel(id: string, { deltaX = 0, deltaY = 0 }: { deltaX?: number; deltaY?: number }): Promise<BrowserSessionStatus> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    await page.mouse.wheel(deltaX, deltaY);
+    await this.refreshPageMetadata(session);
+    return this.toStatus(session);
+  }
+
+  async keyboardType(id: string, { text }: { text: string }): Promise<BrowserSessionStatus> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    await page.keyboard.type(text, { delay: 10 });
+    await this.refreshPageMetadata(session);
+    return this.toStatus(session);
+  }
+
+  // keyboardPress reuses pressKey for viewport-specific route
+  async keyboardPress(id: string, key: string): Promise<BrowserSessionStatus> {
+    return this.pressKey(id, key);
+  }
+
   async evaluate(id: string, script: string): Promise<{ result: unknown; status: BrowserSessionStatus }> {
     const session = this.requireSession(id);
     const page = await this.requirePage(session);
