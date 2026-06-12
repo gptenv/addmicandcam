@@ -5,9 +5,10 @@ import type {
   CameraMode,
   CreateSessionResponse,
   MicMode,
+  PageScrollMetrics,
   PageState
 } from "@telepresence/shared";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, assetFileUrl, shortJson } from "./api.js";
 
 type ResultState = ApiResult<unknown> | null;
@@ -240,12 +241,15 @@ function HomePage() {
 
 function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (res: ApiResult<unknown>) => void }) {
   const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [scrollMetrics, setScrollMetrics] = useState<PageScrollMetrics | null>(null);
   const [lastInput, setLastInput] = useState<string>("");
   const [streamError, setStreamError] = useState<string>("");
+  const viewportRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const lastRefreshRef = useRef(0);
+  const lastScrollMetricsRef = useRef(0);
 
-  const refreshScreenshot = async () => {
+  const refreshScreenshot = useCallback(async () => {
     const now = Date.now();
     if (now - lastRefreshRef.current < 250) return;
     lastRefreshRef.current = now;
@@ -253,7 +257,17 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     if (response.ok && response.data?.dataUrl) {
       setScreenshot(response.data.dataUrl);
     }
-  };
+  }, [id]);
+
+  const refreshScrollMetrics = useCallback(async (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastScrollMetricsRef.current < 750) return;
+    lastScrollMetricsRef.current = now;
+    const response = await apiRequest<PageScrollMetrics>(`/api/sessions/${encodeURIComponent(id)}/scroll`);
+    if (response.ok && response.data) {
+      setScrollMetrics(response.data);
+    }
+  }, [id]);
 
   useEffect(() => {
     const es = new EventSource(`/api/sessions/${encodeURIComponent(id)}/stream`);
@@ -263,6 +277,7 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
         if (payload.dataUrl) {
           setScreenshot(payload.dataUrl);
           setStreamError("");
+          void refreshScrollMetrics();
         }
         if (payload.status) {
           // Surface the status from screenshot SSE event to parent (updates Last API result etc).
@@ -297,7 +312,7 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     return () => {
       es.close();
     };
-  }, [id, onResult]);
+  }, [id, onResult, refreshScrollMetrics]);
 
   const getScaledCoords = (clientX: number, clientY: number) => {
     const img = imgRef.current;
@@ -315,7 +330,7 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     };
   };
 
-  const sendInput = async (path: string, body: unknown, label: string, refresh = true) => {
+  const sendInput = async (path: string, body: unknown, label: string, refresh = true, refreshScroll = false) => {
     const res = await apiRequest(`/api/sessions/${encodeURIComponent(id)}/input/${path}`, {
       method: "POST",
       body: JSON.stringify(body)
@@ -324,6 +339,9 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     onResult?.(res);
     if (refresh) {
       void refreshScreenshot();
+    }
+    if (refreshScroll) {
+      void refreshScrollMetrics(true);
     }
     return res;
   };
@@ -359,9 +377,9 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     void sendInput("move", { x, y }, `move(${x}, ${y})`, false);
   };
 
-  const handleWheel = async (event: React.WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const coords = getScaledCoords(event.clientX, event.clientY);
+  const handleWheelInput = useCallback(async (clientX: number, clientY: number, deltaX: number, deltaY: number) => {
+    viewportRef.current?.focus();
+    const coords = getScaledCoords(clientX, clientY);
     if (!coords) {
       void refreshScreenshot();
       return;
@@ -371,8 +389,22 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
       method: "POST",
       body: JSON.stringify({ x, y })
     }).catch(() => undefined);
-    await sendInput("wheel", { deltaX: event.deltaX, deltaY: event.deltaY }, `wheel(${Math.round(event.deltaX)}, ${Math.round(event.deltaY)})`);
-  };
+    await sendInput("wheel", { deltaX, deltaY }, `wheel(${Math.round(deltaX)}, ${Math.round(deltaY)})`, true, true);
+  }, [id, refreshScreenshot]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleWheelInput(event.clientX, event.clientY, event.deltaX, event.deltaY);
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+    };
+  }, [handleWheelInput]);
 
   const handleKeyDown = async (event: React.KeyboardEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -404,10 +436,20 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
     if (!screenshot) {
       void refreshScreenshot();
     }
+    void refreshScrollMetrics(true);
   };
+
+  const handleScrollbarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const scrollY = Number(event.currentTarget.value);
+    setScrollMetrics((current) => current ? { ...current, scrollY } : current);
+    await sendInput("scroll", { scrollY }, `scrollY ${Math.round(scrollY)}`, true, true);
+  };
+
+  const showVerticalScrollbar = Boolean(scrollMetrics && scrollMetrics.maxScrollY > 1);
 
   return (
     <div
+      ref={viewportRef}
       id="interactive-remote-viewport"
       className="interactive-viewport"
       tabIndex={0}
@@ -415,26 +457,41 @@ function InteractiveRemoteViewport({ id, onResult }: { id: string; onResult?: (r
       onPointerDown={(event) => void handlePointerDown(event)}
       onPointerMove={handlePointerMove}
       onContextMenu={(event) => event.preventDefault()}
-      onWheel={(event) => void handleWheel(event)}
       onKeyDown={(event) => void handleKeyDown(event)}
       aria-label="Interactive remote browser viewport. Click to focus and interact. Use mouse wheel to scroll. Type when focused."
     >
-      {screenshot ? (
-        <img
-          id="latest-screenshot"
-          ref={imgRef}
-          className="interactive-viewport-image"
-          src={screenshot}
-          alt="Live interactive browser viewport"
-          draggable={false}
-        />
-      ) : (
-        <div className="empty-screenshot interactive-viewport-empty" id="latest-screenshot-empty">
-          Waiting for live screenshot stream...
-        </div>
-      )}
+      <div className="interactive-viewport-stage">
+        {screenshot ? (
+          <img
+            id="latest-screenshot"
+            ref={imgRef}
+            className="interactive-viewport-image"
+            src={screenshot}
+            alt="Live interactive browser viewport"
+            draggable={false}
+          />
+        ) : (
+          <div className="empty-screenshot interactive-viewport-empty" id="latest-screenshot-empty">
+            Waiting for live screenshot stream...
+          </div>
+        )}
+        {showVerticalScrollbar ? (
+          <input
+            id="viewport-scrollbar-y"
+            className="interactive-viewport-scrollbar"
+            type="range"
+            min={0}
+            max={Math.max(1, Math.round(scrollMetrics?.maxScrollY || 1))}
+            value={Math.round(scrollMetrics?.scrollY || 0)}
+            onChange={(event) => void handleScrollbarChange(event)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            aria-label="Remote page vertical scroll"
+          />
+        ) : null}
+      </div>
       <div id="interactive-viewport-status" className="interactive-viewport-status">
-        Interactive viewport: click to focus, wheel to scroll, type to send keys. Last input: {lastInput || "none yet"}{streamError ? ` | ${streamError}` : ""}
+        Interactive viewport: click to focus, wheel to scroll inner page, type to send keys. Last input: {lastInput || "none yet"}{streamError ? ` | ${streamError}` : ""}
       </div>
     </div>
   );

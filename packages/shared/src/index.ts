@@ -117,6 +117,17 @@ export interface PageState {
   timestamp: string;
 }
 
+export interface PageScrollMetrics {
+  scrollX: number;
+  scrollY: number;
+  scrollWidth: number;
+  scrollHeight: number;
+  clientWidth: number;
+  clientHeight: number;
+  maxScrollX: number;
+  maxScrollY: number;
+}
+
 export interface CreateSessionResponse {
   session: BrowserSessionStatus;
   urls: {

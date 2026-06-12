@@ -252,11 +252,17 @@ pre {
   cursor: crosshair;
   overflow: hidden;
   outline: none;
+  overscroll-behavior: contain;
+  touch-action: none;
 }
 
 .interactive-viewport:focus,
 .interactive-viewport:focus-visible {
   box-shadow: 0 0 0 3px #7bbf93;
+}
+
+.interactive-viewport-stage {
+  position: relative;
 }
 
 .interactive-viewport-image,
@@ -267,6 +273,21 @@ pre {
   object-fit: contain;
   user-select: none;
   touch-action: none;
+}
+
+.interactive-viewport-scrollbar {
+  position: absolute;
+  z-index: 2;
+  top: 0.55rem;
+  right: 0.45rem;
+  width: 1.5rem;
+  height: calc(100% - 1.1rem);
+  margin: 0;
+  accent-color: #6da982;
+  cursor: pointer;
+  direction: rtl;
+  opacity: 0.92;
+  writing-mode: vertical-lr;
 }
 
 .interactive-viewport-status {

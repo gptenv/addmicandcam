@@ -6,6 +6,7 @@ import type {
   MediaStatus,
   MicRequest,
   MicSourceConfig,
+  PageScrollMetrics,
   PageErrorEntry,
   PageState
 } from "@telepresence/shared";
@@ -219,6 +220,46 @@ export class SessionManager {
     const session = this.requireSession(id);
     const page = await this.requirePage(session);
     await page.mouse.wheel(deltaX, deltaY);
+    await this.refreshPageMetadata(session);
+    return this.toStatus(session);
+  }
+
+  async pageScrollMetrics(id: string): Promise<PageScrollMetrics> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    return page.evaluate(() => {
+      const root = document.scrollingElement || document.documentElement;
+      const scrollX = window.scrollX || root.scrollLeft || 0;
+      const scrollY = window.scrollY || root.scrollTop || 0;
+      const scrollWidth = Math.max(root.scrollWidth, document.body?.scrollWidth || 0, window.innerWidth);
+      const scrollHeight = Math.max(root.scrollHeight, document.body?.scrollHeight || 0, window.innerHeight);
+      const clientWidth = window.innerWidth;
+      const clientHeight = window.innerHeight;
+      return {
+        scrollX,
+        scrollY,
+        scrollWidth,
+        scrollHeight,
+        clientWidth,
+        clientHeight,
+        maxScrollX: Math.max(0, scrollWidth - clientWidth),
+        maxScrollY: Math.max(0, scrollHeight - clientHeight),
+      };
+    });
+  }
+
+  async scrollTo(id: string, { scrollX, scrollY }: { scrollX?: number; scrollY?: number }): Promise<BrowserSessionStatus> {
+    const session = this.requireSession(id);
+    const page = await this.requirePage(session);
+    await page.evaluate(({ left, top }) => {
+      const currentX = window.scrollX || document.scrollingElement?.scrollLeft || 0;
+      const currentY = window.scrollY || document.scrollingElement?.scrollTop || 0;
+      window.scrollTo({
+        left: typeof left === "number" ? left : currentX,
+        top: typeof top === "number" ? top : currentY,
+        behavior: "instant",
+      });
+    }, { left: scrollX, top: scrollY });
     await this.refreshPageMetadata(session);
     return this.toStatus(session);
   }

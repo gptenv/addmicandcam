@@ -164,6 +164,17 @@ export async function createServer(config: AppConfig) {
 
     StateData: { $ref: "#/components/schemas/PageState" },
 
+    EvaluateData: {
+      type: "object",
+      properties: {
+        result: {},
+        status: { $ref: "#/components/schemas/BrowserSessionStatus" },
+      },
+      required: ["status"],
+    },
+
+    ScrollData: { $ref: "#/components/schemas/PageScrollMetrics" },
+
     MediaUpdateData: { $ref: "#/components/schemas/BrowserSessionStatus" },
 
     AssetData: { $ref: "#/components/schemas/AssetMetadata" },
@@ -349,6 +360,21 @@ export async function createServer(config: AppConfig) {
         timestamp: { type: "string", format: "date-time" },
       },
       required: ["sessionId", "currentUrl", "title", "visibleText", "elements", "consoleLogs", "recentErrors", "media", "timestamp"],
+    },
+
+    PageScrollMetrics: {
+      type: "object",
+      properties: {
+        scrollX: { type: "number", example: 0 },
+        scrollY: { type: "number", example: 420 },
+        scrollWidth: { type: "number", example: 1280 },
+        scrollHeight: { type: "number", example: 2400 },
+        clientWidth: { type: "number", example: 1280 },
+        clientHeight: { type: "number", example: 720 },
+        maxScrollX: { type: "number", example: 0 },
+        maxScrollY: { type: "number", example: 1680 },
+      },
+      required: ["scrollX", "scrollY", "scrollWidth", "scrollHeight", "clientWidth", "clientHeight", "maxScrollX", "maxScrollY"],
     },
 
     CreateSessionResponse: {
@@ -692,7 +718,7 @@ export async function createServer(config: AppConfig) {
                 properties: {
                   ok: { type: "boolean" },
                   action: { type: "string" },
-                  data: { $ref: "BrowserSessionStatus#" },
+                  data: { $ref: "EvaluateData#" },
                 },
                 required: ["ok", "data"],
               },
@@ -882,7 +908,7 @@ export async function createServer(config: AppConfig) {
                 properties: {
                   ok: { type: "boolean" },
                   action: { type: "string" },
-                  data: { $ref: "BrowserSessionStatus#" },
+                  data: { $ref: "EvaluateData#" },
                 },
                 required: ["ok", "data"],
               },
@@ -1073,6 +1099,84 @@ export async function createServer(config: AppConfig) {
     const { id } = request.params as { id: string };
     const body = (request.body as { deltaX?: number; deltaY?: number } | undefined) ?? {};
     return okResult("scrolled", await sessions.mouseWheel(id, body));
+  });
+
+  app.get("/api/sessions/:id/scroll", {
+    schema: {
+      tags: ["Input"],
+      summary: "Get page scroll metrics",
+      description: "Returns top-level document scroll offsets and dimensions for rendering a remote-browser scrollbar in the control UI.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      response: {
+        200: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  action: { type: "string" },
+                  data: { $ref: "ScrollData#" },
+                },
+                required: ["ok", "data"],
+              },
+              example: {
+                ok: true,
+                action: "state",
+                data: {
+                  scrollX: 0,
+                  scrollY: 420,
+                  scrollWidth: 1280,
+                  scrollHeight: 2400,
+                  clientWidth: 1280,
+                  clientHeight: 720,
+                  maxScrollX: 0,
+                  maxScrollY: 1680,
+                },
+              },
+            },
+          },
+        },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    return okResult("state", await sessions.pageScrollMetrics(id));
+  });
+
+  app.post("/api/sessions/:id/input/scroll", {
+    schema: {
+      tags: ["Input"],
+      summary: "Scroll page to absolute offset",
+      description: "Sets the top-level document scroll offset. Used by the remote-browser scrollbar next to the screenshot viewport.",
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string", description: "Session UUID" } },
+      },
+      body: {
+        type: "object",
+        properties: {
+          scrollX: { type: "number", description: "Absolute horizontal scroll offset" },
+          scrollY: { type: "number", description: "Absolute vertical scroll offset" },
+        },
+        example: { scrollY: 420 },
+      },
+      response: {
+        200: { $ref: "InputResultResponse#" },
+        400: { $ref: "ErrorResponse#" },
+        404: { $ref: "ErrorResponse#" },
+      },
+    },
+  }, async (request) => {
+    const { id } = request.params as { id: string };
+    const body = requireBody<{ scrollX?: number; scrollY?: number }>(request);
+    return okResult("scrolled", await sessions.scrollTo(id, body));
   });
 
   app.post("/api/sessions/:id/input/type", {
