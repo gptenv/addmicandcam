@@ -15,8 +15,7 @@
 #      URL=$(gcloud run services describe telepresence-lab --format='value(status.url)')
 #      gcloud run services update telepresence-lab --update-env-vars PUBLIC_BASE_URL=$URL --region=...
 #
-# Security: For real deployments, remove allow-unauthenticated and grant IAM to specific users/SAs.
-# Use Secret Manager for ADMIN_TOKEN (shown in comments).
+# The API is public (no authentication required). allow-unauthenticated is appropriate.
 
 apiVersion: serving.knative.dev/v1
 kind: Service
@@ -58,17 +57,7 @@ spec:
               value: '/data'
             - name: HEADLESS
               value: 'true'
-            # IMPORTANT: Set a strong secret token for production!
-            # Prefer Secret Manager:
-            #   - name: ADMIN_TOKEN
-            #     valueFrom:
-            #       secretKeyRef:
-            #         name: telepresence-admin-token
-            #         key: latest
-            - name: ADMIN_TOKEN
-              value: 'REPLACE_WITH_STRONG_TOKEN_OR_USE_SECRET_MANAGER'
-            - name: ALLOW_UNAUTHENTICATED_LOCAL
-              value: 'false'
+            # (API authentication removed; no token required)
             - name: MAX_SESSIONS
               value: '4'
             - name: SESSION_TTL_MS

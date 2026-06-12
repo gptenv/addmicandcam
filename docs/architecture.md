@@ -2,7 +2,7 @@
 
 The repository is an npm workspace:
 
-- `apps/server`: Fastify API, Playwright session manager, uploads, auth, URL policy, static frontend serving
+- `apps/server`: Fastify API (public, no auth), Playwright session manager, uploads, URL policy, static frontend serving
 - `apps/web`: Vite React control UI
 - `packages/shared`: shared TypeScript API/session/asset types
 - `packages/media`: ffmpeg and espeak wrappers for generated media
@@ -32,7 +32,7 @@ Synthetic mic path:
 
 Security boundaries:
 
-- API auth is token-based unless explicitly disabled for local development.
+- The API is public (authentication has been removed).
 - Uploads are stored under `APP_DATA_DIR`; arbitrary filesystem paths are not accepted.
 - URL navigation is limited to `http` and `https`.
 - Local/private/reserved networks are blocked by default.

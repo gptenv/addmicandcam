@@ -8,7 +8,7 @@ import type {
   PageState
 } from "@telepresence/shared";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import { apiRequest, assetFileUrl, getToken, setToken, shortJson } from "./api.js";
+import { apiRequest, assetFileUrl, shortJson } from "./api.js";
 
 type ResultState = ApiResult<unknown> | null;
 
@@ -41,25 +41,6 @@ function Shell({ children }: { children: ReactNode }) {
       </header>
       <main className="page">{children}</main>
     </div>
-  );
-}
-
-function TokenControl() {
-  const [value, setValue] = useState(getToken());
-  return (
-    <label className="field compact">
-      Admin token
-      <input
-        id="admin-token-input"
-        value={value}
-        placeholder="Optional in local unauthenticated mode"
-        autoComplete="off"
-        onChange={(event) => {
-          setValue(event.target.value);
-          setToken(event.target.value);
-        }}
-      />
-    </label>
   );
 }
 
@@ -155,7 +136,6 @@ function HomePage() {
             or microphone sources for permissioned labs.
           </p>
         </div>
-        <TokenControl />
       </section>
 
       <StatusGrid
@@ -369,7 +349,6 @@ function SessionPage({ id }: { id: string }) {
           <h1 id="session-title">{id}</h1>
           <p id="session-current-url">{status?.currentUrl ?? "Loading..."}</p>
         </div>
-        <TokenControl />
       </section>
 
       <StatusGrid
@@ -643,37 +622,31 @@ function ApiDocsPage() {
       <section className="docs">
         <h1>API Docs</h1>
         <p>
-          All endpoints return JSON shaped like <code>{"{ ok, action, data, error }"}</code>. When auth is enabled, send
-          <code> x-admin-token</code> or <code>Authorization: Bearer TOKEN</code>.
+          All endpoints return JSON shaped like <code>{"{ ok, action, data, error }"}</code>. This is a public API; no authentication token is required.
         </p>
 
         <h2>Create Session</h2>
         <pre>{`curl -s -X POST http://localhost:3000/api/sessions \\
   -H "content-type: application/json" \\
-  -H "x-admin-token: $TOKEN" \\
   -d '{}'`}</pre>
 
         <h2>Navigate</h2>
         <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/navigate \\
   -H "content-type: application/json" \\
-  -H "x-admin-token: $TOKEN" \\
   -d '{"url":"https://example.com"}'`}</pre>
 
         <h2>Upload Asset</h2>
         <pre>{`curl -s -X POST http://localhost:3000/api/assets \\
-  -H "x-admin-token: $TOKEN" \\
   -F "file=@avatar.png"`}</pre>
 
         <h2>Set Camera Source</h2>
         <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/media/camera \\
   -H "content-type: application/json" \\
-  -H "x-admin-token: $TOKEN" \\
   -d '{"mode":"image","assetId":"ASSET","disclosure":{"enabled":true,"label":"AI-assisted"}}'`}</pre>
 
         <h2>Set Mic Source</h2>
         <pre>{`curl -s -X POST http://localhost:3000/api/sessions/$SESSION/media/mic \\
   -H "content-type: application/json" \\
-  -H "x-admin-token: $TOKEN" \\
   -d '{"mode":"tts","text":"Hello, I am testing audio.","voice":"default"}'`}</pre>
 
         <h2>LLM Usage Loop</h2>

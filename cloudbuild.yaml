@@ -9,7 +9,7 @@
 # Usage:
 #   gcloud builds submit --config=cloudbuild.yaml --substitutions=_REGION=us-central1,_SERVICE=telepresence-lab,_REPO=telepresence-images
 #
-# After first deploy, set a strong ADMIN_TOKEN (via Secret Manager recommended) and PUBLIC_BASE_URL.
+# PUBLIC_BASE_URL will be configured by post-deploy steps or the helper script.
 
 steps:
   # Build the production image (uses the root Dockerfile which installs ffmpeg/espeak/playwright/etc.)
@@ -51,21 +51,7 @@ steps:
           --min-instances 0 \
           --port 3000 \
           --timeout 900s \
-          --set-env-vars "NODE_ENV=production,HEADLESS=true,HOST=0.0.0.0,PORT=3000,APP_DATA_DIR=/data,ALLOW_UNAUTHENTICATED_LOCAL=false,MAX_SESSIONS=4,SESSION_TTL_MS=3600000,UPLOAD_MAX_BYTES=52428800,ALLOW_PRIVATE_NETWORKS=false,DISCLOSURE_WATERMARK_ENABLED=true,DISCLOSURE_WATERMARK_LABEL=AI-assisted" \
-          --update-secrets "ADMIN_TOKEN=${_SECRET_NAME}:latest" || \
-        gcloud run deploy ${_SERVICE} \
-          --image ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA} \
-          --region ${_REGION} \
-          --platform managed \
-          --allow-unauthenticated \
-          --memory 2Gi \
-          --cpu 2 \
-          --concurrency 1 \
-          --max-instances 5 \
-          --min-instances 0 \
-          --port 3000 \
-          --timeout 900s \
-          --set-env-vars "NODE_ENV=production,HEADLESS=true,HOST=0.0.0.0,PORT=3000,APP_DATA_DIR=/data,ALLOW_UNAUTHENTICATED_LOCAL=false,MAX_SESSIONS=4,SESSION_TTL_MS=3600000,UPLOAD_MAX_BYTES=52428800,ALLOW_PRIVATE_NETWORKS=false,DISCLOSURE_WATERMARK_ENABLED=true,DISCLOSURE_WATERMARK_LABEL=AI-assisted,ADMIN_TOKEN=${_ADMIN_TOKEN:-dev-change-me-in-prod}"
+          --set-env-vars "NODE_ENV=production,HEADLESS=true,HOST=0.0.0.0,PORT=3000,APP_DATA_DIR=/data,MAX_SESSIONS=4,SESSION_TTL_MS=3600000,UPLOAD_MAX_BYTES=52428800,ALLOW_PRIVATE_NETWORKS=false,DISCLOSURE_WATERMARK_ENABLED=true,DISCLOSURE_WATERMARK_LABEL=AI-assisted"
     waitFor: ['push']
 
 # Store the built images for potential rollback / inspection
@@ -79,12 +65,6 @@ substitutions:
   _SERVICE: telepresence-lab
   _IMAGE: telepresence-lab
   _REPO: telepresence-images
-  # For Secret Manager integration (recommended):
-  #   Create secret: gcloud secrets create telepresence-admin-token --data-file=<(echo -n "strong-token-here")
-  #   Then pass _SECRET_NAME=telepresence-admin-token
-  # If no secret, falls back to ADMIN_TOKEN env in second deploy step (less secure).
-  _SECRET_NAME: telepresence-admin-token
-  _ADMIN_TOKEN: ""
 
 options:
   logging: CLOUD_LOGGING_ONLY

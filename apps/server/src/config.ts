@@ -6,8 +6,6 @@ export interface AppConfig {
   port: number;
   baseUrl: string;
   dataDir: string;
-  adminToken?: string;
-  allowUnauthenticatedLocal: boolean;
   maxSessions: number;
   sessionTtlMs: number;
   uploadMaxBytes: number;
@@ -73,8 +71,6 @@ export function getConfig(): AppConfig {
     port,
     baseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${port}`,
     dataDir: path.resolve(process.env.APP_DATA_DIR || path.join(process.cwd(), "data")),
-    adminToken: process.env.ADMIN_TOKEN || undefined,
-    allowUnauthenticatedLocal: boolFromEnv("ALLOW_UNAUTHENTICATED_LOCAL", false),
     maxSessions: intFromEnv("MAX_SESSIONS", 3),
     sessionTtlMs: intFromEnv("SESSION_TTL_MS", 60 * 60 * 1000),
     uploadMaxBytes: intFromEnv("UPLOAD_MAX_BYTES", 50 * 1024 * 1024),

@@ -1,6 +1,6 @@
 # LLM Telepresence Browser Lab
 
-LLM Telepresence Browser Lab is a permissioned remote browser environment for authorized testing, demos, accessibility experiments, and user-owned video-chat labs. It gives LLM agents and browser tools a simple web UI plus HTTP/JSON API for creating isolated Chromium sessions, navigating pages, inspecting state, taking screenshots, and attaching synthetic camera or microphone sources.
+LLM Telepresence Browser Lab is a public remote browser environment for testing, demos, accessibility experiments, and user-owned video-chat labs. It gives LLM agents and browser tools a simple web UI plus HTTP/JSON API for creating isolated Chromium sessions, navigating pages, inspecting state, taking screenshots, and attaching synthetic camera or microphone sources.
 
 ## What This Is
 
@@ -75,7 +75,7 @@ The API runs on port `3000`; Vite runs on port `5173` and proxies `/api` and `/l
 docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The compose file enables `ALLOW_UNAUTHENTICATED_LOCAL=true` for local testing. For shared or production deployments, set a strong `ADMIN_TOKEN` and set `ALLOW_UNAUTHENTICATED_LOCAL=false`.
+Open [http://localhost:3000](http://localhost:3000). (Authentication has been removed; the API is public. Previous `ADMIN_TOKEN` / `ALLOW_UNAUTHENTICATED_LOCAL` env vars are ignored.)
 
 ## GCP Cloud Run Deployment
 
@@ -88,9 +88,10 @@ The fully-working deploy script handles:
 - API enablement, Artifact Registry repo creation
 - Building the image (Cloud Build or local Docker)
 - Creating/updating the Cloud Run service with **browser-friendly resources** (2 GiB memory, 2 CPU, low concurrency)
-- Secret Manager integration for `ADMIN_TOKEN`
 - Automatic `PUBLIC_BASE_URL` configuration after deploy (so session links are correct)
 - Health verification + ready-to-run curl examples
+
+(Note: the API is now public; previous secret/ADMIN_TOKEN handling for auth has been removed from the app.)
 
 ```bash
 # Interactive (will prompt for project / generate token if needed)
@@ -100,11 +101,10 @@ The fully-working deploy script handles:
 PROJECT_ID=my-gcp-project \
 REGION=us-central1 \
 SERVICE=telepresence-lab \
-ADMIN_TOKEN="$(openssl rand -hex 20)" \
 ./scripts/deploy-gcp.sh --non-interactive
 ```
 
-The script is self-documenting and prints the live URL, token usage, and post-deploy hardening steps.
+The script is self-documenting and prints the live URL and post-deploy notes. (API auth tokens are no longer used.)
 
 ### Alternative: Cloud Build (declarative / Git-triggered)
 
@@ -114,10 +114,10 @@ gcloud artifacts repositories create telepresence-images --repository-format=doc
 
 gcloud builds submit \
   --config=cloudbuild.yaml \
-  --substitutions="_REGION=us-central1,_SERVICE=telepresence-lab,_REPO=telepresence-images,_SECRET_NAME=telepresence-admin-token"
+  --substitutions="_REGION=us-central1,_SERVICE=telepresence-lab,_REPO=telepresence-images"
 ```
 
-See [cloudbuild.yaml](cloudbuild.yaml) for details and Secret Manager wiring.
+See [cloudbuild.yaml](cloudbuild.yaml) (auth-related secret wiring has been removed since the API is now public).
 
 ### Declarative service manifest
 
@@ -136,25 +136,17 @@ gcloud run services update telepresence-lab --update-env-vars PUBLIC_BASE_URL=$U
 - **Concurrency**: 1 (each active browser session is heavyweight; increase only if you cap MAX_SESSIONS very low).
 - **Max instances**: 5 (tune together with `MAX_SESSIONS`).
 - **Ephemeral storage**: `/data` (assets, Y4M/WAV files, derived media) is per-instance and lost on restarts/scale-to-zero. Fine for demos, testing, and short-lived labs. Persistent storage would require app-level Cloud Storage integration.
-- **Secrets**: `ADMIN_TOKEN` stored in Secret Manager and mounted at runtime (preferred). The deploy script creates `telepresence-admin-token` secret and grants the Cloud Run runtime SA access.
-- **Unauthenticated**: Initially allowed for easy testing. Production: `gcloud run services update ... --no-allow-unauthenticated` + IAM bindings.
 - **PUBLIC_BASE_URL**: Automatically set by the deploy script to the canonical `https://...run.app` so `POST /api/sessions` returns usable absolute `web`/`lite`/etc. links.
 - **Health**: `/api/health` is used implicitly; the server also responds to Cloud Run lifecycle signals.
 
+(The API is public; no ADMIN_TOKEN or IAM lockdown for auth is required.)
+
 ### Post-deploy checklist
 
-1. Visit the service URL and enter your admin token in the UI header.
+1. Visit the service URL.
 2. Create a session and test a navigation + screenshot.
-3. (Recommended) Lock down auth:
-   ```bash
-   gcloud run services update telepresence-lab --region=us-central1 --no-allow-unauthenticated
-   gcloud run services add-iam-policy-binding telepresence-lab \
-     --region=us-central1 \
-     --member="user:your-email@example.com" \
-     --role="roles/run.invoker"
-   ```
-4. Optionally set `ALLOWED_URL_PATTERNS` or other restrictions via env var updates.
-5. Monitor logs: `gcloud run services logs read telepresence-lab --region=us-central1 --limit=100`
+3. Optionally set `ALLOWED_URL_PATTERNS` or other restrictions via env var updates.
+4. Monitor logs: `gcloud run services logs read telepresence-lab --region=us-central1 --limit=100`
 
 ### Dockerfile & build notes for Cloud Run
 
@@ -162,12 +154,10 @@ The root [Dockerfile](Dockerfile) already produces a Cloud Run compatible image 
 
 Cloud Build + Artifact Registry is used because the image is large (Chromium) and benefits from remote caching / high-CPU builders.
 
-## Security Configuration
+## Configuration
 
 Important environment variables:
 
-- `ADMIN_TOKEN`: token accepted through `x-admin-token` or `Authorization: Bearer ...`
-- `ALLOW_UNAUTHENTICATED_LOCAL`: disables API auth when `true`; use only for local development
 - `MAX_SESSIONS`: concurrent session limit
 - `SESSION_TTL_MS`: automatic session cleanup interval
 - `UPLOAD_MAX_BYTES`: upload size limit
@@ -176,6 +166,8 @@ Important environment variables:
 - `BLOCKED_URL_PATTERNS`: comma-separated glob patterns
 - `DISCLOSURE_WATERMARK_ENABLED`: adds disclosure text to generated camera video
 - `DISCLOSURE_WATERMARK_LABEL`: default watermark label
+
+(Note: API authentication via `ADMIN_TOKEN` / `ALLOW_UNAUTHENTICATED_LOCAL` has been removed; all API endpoints are public. The `/lite` UI is also unauthenticated.)
 
 Private, loopback, link-local, and reserved IP targets are blocked by default to reduce SSRF risk.
 
@@ -186,7 +178,6 @@ Create a session:
 ```bash
 curl -s -X POST http://localhost:3000/api/sessions \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{}'
 ```
 
@@ -194,7 +185,6 @@ Upload an avatar image:
 
 ```bash
 curl -s -X POST http://localhost:3000/api/assets \
-  -H "x-admin-token: $TOKEN" \
   -F "file=@avatar.png"
 ```
 
@@ -203,7 +193,6 @@ Set that image as the fake webcam:
 ```bash
 curl -s -X POST http://localhost:3000/api/sessions/$SESSION/media/camera \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"mode":"image","assetId":"ASSET_ID","disclosure":{"enabled":true,"label":"AI-assisted"}}'
 ```
 
@@ -212,7 +201,6 @@ Navigate to a target site:
 ```bash
 curl -s -X POST http://localhost:3000/api/sessions/$SESSION/navigate \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"url":"https://example.com"}'
 ```
 
@@ -221,22 +209,19 @@ Generate TTS audio:
 ```bash
 curl -s -X POST http://localhost:3000/api/tts \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"text":"Hello, I am testing audio.","voice":"default"}'
 ```
 
 Inspect state:
 
 ```bash
-curl -s http://localhost:3000/api/sessions/$SESSION/state \
-  -H "x-admin-token: $TOKEN"
+curl -s http://localhost:3000/api/sessions/$SESSION/state
 ```
 
 Take a screenshot:
 
 ```bash
-curl -s http://localhost:3000/api/sessions/$SESSION/screenshot \
-  -H "x-admin-token: $TOKEN"
+curl -s http://localhost:3000/api/sessions/$SESSION/screenshot
 ```
 
 ## API Endpoints

@@ -8,15 +8,15 @@ Use:
 docker compose up --build
 ```
 
-The compose file is intended for local development. It sets `ALLOW_UNAUTHENTICATED_LOCAL=true`; change that before sharing the service beyond your machine.
+The compose file is intended for local development.
 
-For stricter deployments:
+For production-like deployments:
 
-- Set a strong `ADMIN_TOKEN`
-- Set `ALLOW_UNAUTHENTICATED_LOCAL=false`
-- Set `ALLOWED_URL_PATTERNS`
+- Set `ALLOWED_URL_PATTERNS` / `BLOCKED_URL_PATTERNS` as needed
 - Keep `ALLOW_PRIVATE_NETWORKS=false`
 - Mount a persistent data volume at `APP_DATA_DIR`
-- Put the service behind TLS and an authenticated reverse proxy
+- Put the service behind TLS and a reverse proxy if desired
 
-See the root README for **GCP Cloud Run** deployment (complete scaffolding including a one-command deploy script, Cloud Build config, declarative service.yaml, Secret Manager integration, and resource tuning for Chromium workloads is included in the repo).
+(Note: the API is now public; `ADMIN_TOKEN` / `ALLOW_UNAUTHENTICATED_LOCAL` settings are no longer used.)
+
+See the root README for **GCP Cloud Run** deployment (complete scaffolding including a one-command deploy script, Cloud Build config, declarative service.yaml, and resource tuning for Chromium workloads is included in the repo).

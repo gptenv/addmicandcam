@@ -8,9 +8,6 @@ const app = await createServer(config);
 try {
   await app.listen({ host: config.host, port: config.port });
   app.log.info(`LLM Telepresence Browser Lab listening on ${config.baseUrl}`);
-  if (!config.allowUnauthenticatedLocal && !config.adminToken) {
-    app.log.warn("ADMIN_TOKEN is not set and ALLOW_UNAUTHENTICATED_LOCAL=false; protected API calls will be rejected.");
-  }
 } catch (error) {
   app.log.error(error);
   process.exit(1);

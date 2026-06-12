@@ -1,25 +1,7 @@
 import type { ApiResult, AssetMetadata } from "@telepresence/shared";
 
-const TOKEN_KEY = "telepresence-admin-token";
-
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? "";
-}
-
-export function setToken(token: string): void {
-  if (token.trim()) {
-    localStorage.setItem(TOKEN_KEY, token.trim());
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
-  }
-}
-
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<ApiResult<T>> {
   const headers = new Headers(init.headers);
-  const token = getToken();
-  if (token) {
-    headers.set("x-admin-token", token);
-  }
   if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
@@ -42,9 +24,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 }
 
 export function assetFileUrl(asset: AssetMetadata): string {
-  const token = getToken();
-  const url = asset.url ?? `/api/assets/${asset.id}/file`;
-  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+  return asset.url ?? `/api/assets/${asset.id}/file`;
 }
 
 export function shortJson(value: unknown): string {

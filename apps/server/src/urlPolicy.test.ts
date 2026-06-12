@@ -7,7 +7,6 @@ const baseConfig: AppConfig = {
   port: 3000,
   baseUrl: "http://localhost:3000",
   dataDir: "/tmp/lab",
-  allowUnauthenticatedLocal: true,
   maxSessions: 3,
   sessionTtlMs: 1000,
   uploadMaxBytes: 1024,

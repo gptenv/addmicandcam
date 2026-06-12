@@ -10,7 +10,6 @@ import path from "node:path";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { AppConfig } from "./config.js";
 import { AssetStore } from "./assetStore.js";
-import { getRequestToken, isAuthorized } from "./auth.js";
 import { HttpError } from "./errors.js";
 import { mapExternalToolError, SessionManager } from "./sessionManager.js";
 
@@ -37,17 +36,6 @@ export async function createServer(config: AppConfig) {
     }
   });
 
-  app.addHook("preHandler", async (request, reply) => {
-    if (!request.url.startsWith("/api") || request.url === "/api/health") {
-      return;
-    }
-    if (!isAuthorized(config, request)) {
-      return reply.code(401).send(
-        errorResult("UNAUTHORIZED", "API calls require x-admin-token or Authorization: Bearer token")
-      );
-    }
-  });
-
   app.setErrorHandler(async (error, _request, reply) => {
     const mapped = mapExternalToolError(error) ?? (error instanceof HttpError ? error : undefined);
     if (mapped) {
@@ -67,7 +55,7 @@ export async function createServer(config: AppConfig) {
     return okResult("state", {
       status: "ok",
       mediaTools: await probeMediaTools(),
-      authRequired: !config.allowUnauthenticatedLocal,
+      authRequired: false,
       maxSessions: config.maxSessions
     });
   });
@@ -245,26 +233,22 @@ export async function createServer(config: AppConfig) {
   });
 
   app.post("/lite/create", async (request, reply) => {
-    ensureLiteAuth(config, request);
-    const body = request.body as { token?: string; initialUrl?: string } | undefined;
+    const body = request.body as { initialUrl?: string } | undefined;
     const session = await sessions.createSession(body?.initialUrl || undefined);
-    return reply.redirect(`/lite?session=${encodeURIComponent(session.id)}&token=${encodeURIComponent(String(body?.token ?? ""))}`);
+    return reply.redirect(`/lite?session=${encodeURIComponent(session.id)}`);
   });
 
   app.post("/lite/navigate", async (request, reply) => {
-    ensureLiteAuth(config, request);
-    const body = request.body as { token?: string; session?: string; url?: string } | undefined;
+    const body = request.body as { session?: string; url?: string } | undefined;
     if (!body?.session || !body.url) {
       throw new HttpError(400, "FORM_REQUIRED", "session and url are required");
     }
     await sessions.navigate(body.session, body.url);
-    return reply.redirect(`/lite?session=${encodeURIComponent(body.session)}&token=${encodeURIComponent(String(body.token ?? ""))}`);
+    return reply.redirect(`/lite?session=${encodeURIComponent(body.session)}`);
   });
 
   app.post("/lite/action", async (request, reply) => {
-    ensureLiteAuth(config, request);
     const body = request.body as {
-      token?: string;
       session?: string;
       action?: string;
       selector?: string;
@@ -285,7 +269,7 @@ export async function createServer(config: AppConfig) {
     } else {
       throw new HttpError(400, "INVALID_ACTION", "Unsupported lite action");
     }
-    return reply.redirect(`/lite?session=${encodeURIComponent(body.session)}&token=${encodeURIComponent(String(body.token ?? ""))}`);
+    return reply.redirect(`/lite?session=${encodeURIComponent(body.session)}`);
   });
 
   await registerFrontend(app, config);
@@ -317,16 +301,8 @@ function sessionUrls(baseUrl: string, id: string): CreateSessionResponse["urls"]
   };
 }
 
-function ensureLiteAuth(config: AppConfig, request: FastifyRequest): void {
-  const body = request.body as { token?: unknown } | undefined;
-  if (!isAuthorized(config, request, body?.token)) {
-    throw new HttpError(401, "UNAUTHORIZED", "Lite actions require a valid token");
-  }
-}
-
 function renderLitePage(config: AppConfig, request: FastifyRequest, sessions: SessionManager): string {
-  const query = request.query as { session?: string; token?: string } | undefined;
-  const token = query?.token ?? getRequestToken(request) ?? "";
+  const query = request.query as { session?: string } | undefined;
   const selectedId = query?.session ?? sessions.listSessions()[0]?.id ?? "";
   const selectedStatus = selectedId ? safeStatus(sessions, selectedId) : undefined;
   const screenshot = selectedStatus?.latestScreenshotDataUrl ?? "";
@@ -352,18 +328,16 @@ function renderLitePage(config: AppConfig, request: FastifyRequest, sessions: Se
   </head>
   <body>
     <h1>LLM Telepresence Browser Lab Lite</h1>
-    <p>Text-only controls for permissioned sessions. Use only on sites and conversations where you are authorized to participate.</p>
+    <p>Text-only controls. Use only on sites and conversations where you have permission to participate.</p>
 
     <form method="post" action="/lite/create">
       <h2>Create Session</h2>
-      <label>Admin token <input id="lite-token-create" name="token" value="${escapeHtml(token)}" autocomplete="off" /></label><br />
       <label>Initial URL <input id="lite-initial-url" name="initialUrl" placeholder="https://example.com" /></label><br />
       <button id="lite-create-session" type="submit">Create Session</button>
     </form>
 
     <form method="post" action="/lite/navigate">
       <h2>Navigate</h2>
-      <input type="hidden" name="token" value="${escapeHtml(token)}" />
       <label>Session <select id="lite-session-select" name="session">${sessionOptions}</select></label><br />
       <label>URL <input id="lite-navigate-url" name="url" placeholder="https://example.com" /></label><br />
       <button id="lite-navigate" type="submit">Navigate</button>
@@ -371,7 +345,6 @@ function renderLitePage(config: AppConfig, request: FastifyRequest, sessions: Se
 
     <form method="post" action="/lite/action">
       <h2>Actions</h2>
-      <input type="hidden" name="token" value="${escapeHtml(token)}" />
       <label>Session <select name="session">${sessionOptions}</select></label><br />
       <label>Action
         <select id="lite-action" name="action">

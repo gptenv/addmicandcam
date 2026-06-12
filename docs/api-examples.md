@@ -1,10 +1,9 @@
 # API Examples
 
-Set a token when auth is enabled:
+The API is public (no token required).
 
 ```bash
 export BASE=http://localhost:3000
-export TOKEN=dev-token-change-me
 ```
 
 Create a session:
@@ -12,7 +11,6 @@ Create a session:
 ```bash
 curl -s -X POST "$BASE/api/sessions" \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{}'
 ```
 
@@ -21,7 +19,6 @@ Navigate:
 ```bash
 curl -s -X POST "$BASE/api/sessions/SESSION_ID/navigate" \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"url":"https://example.com"}'
 ```
 
@@ -29,7 +26,6 @@ Upload an avatar image:
 
 ```bash
 curl -s -X POST "$BASE/api/assets" \
-  -H "x-admin-token: $TOKEN" \
   -F "file=@avatar.png"
 ```
 
@@ -38,7 +34,6 @@ Set the fake camera:
 ```bash
 curl -s -X POST "$BASE/api/sessions/SESSION_ID/media/camera" \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"mode":"image","assetId":"ASSET_ID","disclosure":{"enabled":true,"label":"AI-assisted"}}'
 ```
 
@@ -47,15 +42,13 @@ Generate TTS:
 ```bash
 curl -s -X POST "$BASE/api/tts" \
   -H "content-type: application/json" \
-  -H "x-admin-token: $TOKEN" \
   -d '{"text":"Hello, I am testing audio.","voice":"default"}'
 ```
 
 Inspect page state:
 
 ```bash
-curl -s "$BASE/api/sessions/SESSION_ID/state" \
-  -H "x-admin-token: $TOKEN"
+curl -s "$BASE/api/sessions/SESSION_ID/state"
 ```
 
 LLM agent workflow:

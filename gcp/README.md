@@ -4,7 +4,7 @@ This directory contains declarative configuration for deploying the LLM Telepres
 
 ## Files
 
-- `service.yaml` - Knative / Cloud Run service spec with production resource recommendations (2Gi memory, low concurrency, Secret Manager example for ADMIN_TOKEN, etc.).
+- `service.yaml` - Knative / Cloud Run service spec with production resource recommendations (2Gi memory, low concurrency, etc.).
 - Use together with the root `cloudbuild.yaml` and `scripts/deploy-gcp.sh`.
 
 ## Quick usage
@@ -25,11 +25,10 @@ URL=$(gcloud run services describe telepresence-lab --format='value(status.url)'
 gcloud run services update telepresence-lab --update-env-vars PUBLIC_BASE_URL=$URL --region=us-central1
 ```
 
-## Production hardening notes
+## Notes
 
-- Remove `--allow-unauthenticated` / set `run.googleapis.com/ingress` restrictions.
-- Bind IAM invoker role only to the principals who should access the lab.
-- Use Secret Manager for the admin token (example commented in service.yaml).
+- The API is public (authentication removed); `--allow-unauthenticated` is fine for most use cases.
+- Consider IAM lockdown only if you want to restrict who can reach the service at the Cloud Run level.
 - Consider setting `min-instances: 1` only if you need to avoid cold-start browser launch latency (costs more).
 - Monitor memory/CPU; multiple concurrent browser sessions + ffmpeg transcodes are RAM + CPU intensive.
 
