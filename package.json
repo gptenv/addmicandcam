@@ -1,0 +1,27 @@
+{
+  "name": "llm-telepresence-browser-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Permissioned LLM-friendly remote browser lab with synthetic camera and microphone inputs.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "packages/media",
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@telepresence/shared && npm run build --workspace=@telepresence/media && npm run build --workspace=@telepresence/server && npm run build --workspace=@telepresence/web",
+    "dev": "npm run build --workspace=@telepresence/shared && npm run build --workspace=@telepresence/media && node scripts/dev.mjs",
+    "start": "npm run start --workspace=@telepresence/server",
+    "test": "vitest run",
+    "typecheck": "tsc -b",
+    "deploy:gcp": "bash scripts/deploy-gcp.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.2"
+  }
+}

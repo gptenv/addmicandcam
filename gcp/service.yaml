@@ -1,0 +1,104 @@
+# gcp/service.yaml
+# Declarative Cloud Run service definition for LLM Telepresence Browser Lab.
+#
+# Apply with:
+#   gcloud run services replace gcp/service.yaml --region=us-central1
+#
+# Or for initial create + update:
+#   gcloud run services replace gcp/service.yaml
+#
+# Recommended workflow:
+# 1. Build & push image to Artifact Registry (see cloudbuild.yaml or deploy script).
+# 2. Update the `image:` below to your :latest or :$SHA tag.
+# 3. gcloud run services replace gcp/service.yaml
+# 4. (Optional) After deploy, run:
+#      URL=$(gcloud run services describe telepresence-lab --format='value(status.url)')
+#      gcloud run services update telepresence-lab --update-env-vars PUBLIC_BASE_URL=$URL --region=...
+#
+# Security: For real deployments, remove allow-unauthenticated and grant IAM to specific users/SAs.
+# Use Secret Manager for ADMIN_TOKEN (shown in comments).
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: telepresence-lab
+  annotations:
+    # Autoscaling & scaling recommendations for browser workload (each session = 1 Chromium process)
+    run.googleapis.com/cpu-throttling: 'false'   # Keep CPU for active browsers
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        # Generous resources required for Chromium + ffmpeg + multiple sessions.
+        # 512Mi is too small and will OOM when launching browsers.
+        run.googleapis.com/memory: '2Gi'
+        run.googleapis.com/cpu: '2'
+        # Limit concurrency: a single instance should not juggle many heavy browser sessions.
+        run.googleapis.com/concurrency: '1'
+        # Max instances to protect cost / quota. Tune to your MAX_SESSIONS * expected users.
+        run.googleapis.com/max-instances: '5'
+        # Startup time allowance (browser launches, media conversion can be 30-90s on cold start)
+        run.googleapis.com/startup-cpu-boost: 'true'
+    spec:
+      containerConcurrency: 1
+      timeoutSeconds: 900
+      containers:
+        - image: us-central1-docker.pkg.dev/PROJECT_ID/telepresence-images/telepresence-lab:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: 'production'
+            - name: HOST
+              value: '0.0.0.0'
+            - name: PORT
+              value: '3000'
+            - name: APP_DATA_DIR
+              value: '/data'
+            - name: HEADLESS
+              value: 'true'
+            # IMPORTANT: Set a strong secret token for production!
+            # Prefer Secret Manager:
+            #   - name: ADMIN_TOKEN
+            #     valueFrom:
+            #       secretKeyRef:
+            #         name: telepresence-admin-token
+            #         key: latest
+            - name: ADMIN_TOKEN
+              value: 'REPLACE_WITH_STRONG_TOKEN_OR_USE_SECRET_MANAGER'
+            - name: ALLOW_UNAUTHENTICATED_LOCAL
+              value: 'false'
+            - name: MAX_SESSIONS
+              value: '4'
+            - name: SESSION_TTL_MS
+              value: '3600000'
+            - name: UPLOAD_MAX_BYTES
+              value: '52428800'
+            - name: ALLOW_PRIVATE_NETWORKS
+              value: 'false'
+            - name: DISCLOSURE_WATERMARK_ENABLED
+              value: 'true'
+            - name: DISCLOSURE_WATERMARK_LABEL
+              value: 'AI-assisted'
+            # Set PUBLIC_BASE_URL to your deployed service URL after first deploy so that
+            # returned session links (web, lite, api) are correct absolute URLs.
+            # Example: https://telepresence-lab-abc123-uc.a.run.app
+            # - name: PUBLIC_BASE_URL
+            #   value: 'https://YOUR-SERVICE-URL.run.app'
+          resources:
+            limits:
+              memory: '2Gi'
+              cpu: '2'
+          # Ephemeral /data is sufficient for lab/demo use. For persistent assets across
+          # restarts use Cloud Storage (requires code changes) or Filestore + sidecar (advanced).
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+  traffic:
+    - percent: 100
+      latestRevision: true

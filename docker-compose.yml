@@ -1,0 +1,21 @@
+services:
+  telepresence-lab:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      APP_DATA_DIR: "/data"
+      HEADLESS: "true"
+      ADMIN_TOKEN: "dev-token-change-me"
+      ALLOW_UNAUTHENTICATED_LOCAL: "true"
+      ALLOW_PRIVATE_NETWORKS: "false"
+      DISCLOSURE_WATERMARK_ENABLED: "true"
+      DISCLOSURE_WATERMARK_LABEL: "AI-assisted"
+    volumes:
+      - telepresence-data:/data
+    shm_size: "1gb"
+
+volumes:
+  telepresence-data:
